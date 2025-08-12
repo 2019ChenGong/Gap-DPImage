@@ -21,6 +21,7 @@ import json
 import torch
 import torchvision
 from torchvision import transforms
+from torch.utils.data import Dataset, ConcatDataset
 
 from fld.features.InceptionFeatureExtractor import InceptionFeatureExtractor
 
@@ -30,6 +31,52 @@ from data.stylegan3.dataset import ImageFolderDataset
 
 import os
 from PIL import Image
+
+class COVIDxDataset(Dataset):
+    def __init__(self, root_dir, split_files, transform=None):
+        """
+        root_dir: Dataset root directory (e.g., dataset/covidx-cxr4)
+        split_files: List of files like train.txt and/or val.txt, merged in order
+        transform: Image transformations (e.g., ToTensor, Resize)
+        """
+        self.root_dir = root_dir
+        self.transform = transform
+        self.data = []
+        self.labels = []
+        self.label_map = {'negative': 0, 'positive': 1}  # Binary classification
+
+        # Read all split files in order
+        for split_file in split_files:
+            if not os.path.exists(split_file):
+                print(f"Warning: {split_file} does not exist, skipping")
+                continue
+            # Determine subfolder based on split_file name (e.g., 'train.txt' -> 'train')
+            subfolder = os.path.basename(split_file).replace('.txt', '')
+            with open(split_file, 'r') as f:
+                lines = f.readlines()
+                for line in lines:
+                    # Format: [patient_id] [filename] [class] [data_source]
+                    parts = line.strip().split()
+                    if len(parts) >= 4:  # Ensure at least 4 columns
+                        filename = parts[1]  # Filename in 2nd column
+                        label = parts[2]     # Class in 3rd column
+                        img_path = os.path.join(root_dir, subfolder, filename)
+                        if not os.path.exists(img_path):
+                            print(f"Warning: Image not found: {img_path}")
+                            continue
+                        self.data.append(img_path)
+                        self.labels.append(self.label_map.get(label, 0))  # Map label to integer
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        img_path = self.data[idx]
+        label = self.labels[idx]
+        image = Image.open(img_path).convert('RGB')  # Ensure 3-channel images
+        if self.transform:
+            image = self.transform(image)
+        return image, label
 
 # resize images into the needed resolution
 def resize_images(source_dir, target_dir, size=(32, 32)):
@@ -317,6 +364,28 @@ def main(config):
                 train_size = int(len(sensitive_set) * 0.8)
                 test_size = len(sensitive_set) - train_size
                 sensitive_train_set, sensitive_test_set = torch.utils.data.random_split(sensitive_set, [train_size, test_size])
+            elif data_name == "covidx-cxr4":
+                # Load COVIDx CXR-4 dataset and merge train.txt and val.txt
+                train_split_file = os.path.join(data_dir, "train.txt")
+                val_split_file = os.path.join(data_dir, "val.txt")
+                test_split_file = os.path.join(data_dir, "test.txt")
+                print(f"Checking train.txt: {train_split_file}")
+                print(f"Checking val.txt: {val_split_file}")
+                print(f"Checking test.txt: {test_split_file}")
+                transform = transforms.Compose([
+                    transforms.Resize((config.resolution, config.resolution)),  # Resize to 32x32
+                    transforms.ToTensor()
+                ])
+                # Merge train.txt and val.txt in order
+                split_files = []
+                if os.path.exists(train_split_file):
+                    split_files.append(train_split_file)
+                if os.path.exists(val_split_file):
+                    split_files.append(val_split_file)
+                if not split_files:
+                    raise FileNotFoundError("train.txt or val.txt does not exist")
+                sensitive_train_set = COVIDxDataset(root_dir=data_dir, split_files=split_files, transform=transform)
+                sensitive_test_set = COVIDxDataset(root_dir=data_dir, split_files=[test_split_file], transform=transform)
             elif config.train_path != '' and config.test_path != '':
                 sensitive_train_set = torchvision.datasets.ImageFolder(root=config.train_path, transform=transforms.ToTensor())
                 sensitive_test_set = torchvision.datasets.ImageFolder(root=config.test_path, transform=transforms.ToTensor())
@@ -356,7 +425,7 @@ def main(config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_name', nargs="*", default=["mnist", "fmnist", "cifar10", "cifar100", "celeba", "camelyon", "imagenet", "places365", "emnist", "lsun"], help='List of datasets to use. Default is all provided datasets.')
+    parser.add_argument('--data_name', nargs="*", default=["mnist", "fmnist", "cifar10", "cifar100", "celeba", "camelyon", "imagenet", "places365", "emnist", "lsun",  "covidx-cxr4"], help='List of datasets to use. Default is all provided datasets.')
     parser.add_argument('--resolution', default=32, type=int, help='Resolution of the images. Default is 32.')
     parser.add_argument('--c', default=3, type=int, help='Number of color channels in the images. Default is 3 (RGB).')
     parser.add_argument('--fid_batch_size', default=500, type=int, help='Batch size for FID calculation. Default is 500.')

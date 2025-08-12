@@ -19,5 +19,6 @@ opencv-python
 image-reward
 diffusers==0.30.3
 test-tube==0.7.5
+kaggle
 git+https://github.com/marcojira/fld.git
 -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers

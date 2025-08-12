@@ -30,7 +30,8 @@ class random_aug(object):
     def __repr__(self):
         return self.__class__.__name__
     
-def load_sensitive_data(config):    
+def load_sensitive_data(config):  
+    print(config.sensitive_data.train_path)  
     sensitive_train_set = ImageFolderDataset(
             config.sensitive_data.train_path, config.sensitive_data.resolution, config.sensitive_data.num_channels, use_labels=True)
     sensitive_test_set = ImageFolderDataset(
@@ -48,6 +49,8 @@ def load_sensitive_data(config):
             train_size = 145064
         elif "camelyon" in config.sensitive_data.name:
             train_size = 269538
+        elif "covidx" in config.sensitive_data.name:
+            train_size = 67863
         else:
             raise NotImplementedError
 
