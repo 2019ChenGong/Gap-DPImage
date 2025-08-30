@@ -71,8 +71,12 @@ class DP_Diffusion(DPSynther):
         self.private_num_classes = config.private_num_classes  # Number of private classes
         self.public_num_classes = config.public_num_classes  # Number of public classes
         label_dim = max(self.private_num_classes, self.public_num_classes)  # Determine the maximum label dimension
+        if config.ckpt is not None:
+            state = torch.load(config.ckpt, map_location=self.device)
+            for k, v in state['model'].items():
+                label_dim = v.shape[0]-1
+                break
         self.network.label_dim = label_dim  # Set the label dimension for the network
-
         if 'mode' in self.all_config.pretrain and self.all_config.pretrain.mode != 'time':
             self.freq_model = Freq_Model(self.all_config.model.freq, self.device, self.all_config.train.sigma_sensitivity_ratio)
 
@@ -184,7 +188,7 @@ class DP_Diffusion(DPSynther):
             sampler=DistributedSampler(public_dataloader.dataset), 
             pin_memory=True, 
             drop_last=True, 
-            num_workers=0
+            num_workers=4 if config.batch_size // self.global_size > 8 else 0
         )
 
         # Initialize the loss function based on the configuration.
@@ -265,9 +269,6 @@ class DP_Diffusion(DPSynther):
                 dist.barrier()
 
                 # Prepare the input data for training.
-                if len(train_y.shape) == 2:
-                    train_x = train_x.to(torch.float32) / 255.
-                    train_y = torch.argmax(train_y, dim=1)
                 train_x, train_y = train_x.to(self.device) * 2. - 1., train_y.to(self.device)
                 optimizer.zero_grad(set_to_none=True)
                 loss = torch.mean(loss_fn(model, train_x, train_y))

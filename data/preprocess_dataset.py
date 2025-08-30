@@ -305,7 +305,8 @@ def fid_save(fid_path, dataset, batch_size):
 def main(config):
     for data_name in config.data_name:
         if data_name == 'celeba':
-            res_list = [32, 64, 128]
+            # res_list = [32, 64, 128]
+            res_list = [256]
         elif 'mnist' in data_name:
             res_list = [28]
         else:
