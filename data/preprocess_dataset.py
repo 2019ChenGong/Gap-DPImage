@@ -307,6 +307,8 @@ def main(config):
         if data_name == 'celeba':
             # res_list = [32, 64, 128]
             res_list = [256]
+        elif data_name == 'covidx-cxr4':
+            res_list = [512]
         elif 'mnist' in data_name:
             res_list = [28]
         else:
@@ -374,7 +376,7 @@ def main(config):
                 print(f"Checking val.txt: {val_split_file}")
                 print(f"Checking test.txt: {test_split_file}")
                 transform = transforms.Compose([
-                    transforms.Resize((config.resolution, config.resolution)),  # Resize to 32x32
+                    transforms.Resize((config.resolution, config.resolution)), 
                     transforms.ToTensor()
                 ])
                 # Merge train.txt and val.txt in order
