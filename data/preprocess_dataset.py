@@ -22,6 +22,7 @@ import torch
 import torchvision
 from torchvision import transforms
 from torch.utils.data import Dataset, ConcatDataset
+from wilds import get_dataset
 
 from fld.features.InceptionFeatureExtractor import InceptionFeatureExtractor
 
@@ -308,7 +309,9 @@ def main(config):
             # res_list = [32, 64, 128]
             res_list = [256]
         elif data_name == 'covidx-cxr4':
-            res_list = [512]
+            res_list = [1024]
+        elif data_name == 'camelyon':
+            res_list = [96]
         elif 'mnist' in data_name:
             res_list = [28]
         else:
@@ -350,8 +353,34 @@ def main(config):
                 sensitive_train_set = torchvision.datasets.CelebA(root=data_dir, split="train",  download=False, transform=transforms.ToTensor(), target_transform=target_transform)
                 sensitive_test_set = torchvision.datasets.CelebA(root=data_dir, split="test", download=False, transform=transforms.ToTensor(), target_transform=target_transform)
             elif data_name == "camelyon":
-                sensitive_train_set = torchvision.datasets.ImageFolder(root=os.path.join(data_dir, "camelyon17_32", "train"), transform=transforms.ToTensor())
-                sensitive_test_set = torchvision.datasets.ImageFolder(root=os.path.join(data_dir, "camelyon17_32", "test"), transform=transforms.ToTensor())
+
+                class SimpleCamelyonDataset(Dataset):
+                    def __init__(self, subset, transform=None):
+                        self.subset = subset
+                        self.transform = transform
+                        # 提前提取所有数据索引和标签（不加载图像到内存）
+                        self.indices = list(range(len(subset)))
+
+                    def __len__(self):
+                        return len(self.indices)
+
+                    def __getitem__(self, idx):
+                        # WILDS 返回: (x, y, metadata)
+                        x, y, _ = self.subset[idx]
+                        # x 是 PIL Image 或 numpy array
+                        if not isinstance(x, Image.Image):
+                            x = Image.fromarray(x)
+
+                        if self.transform:
+                            x = self.transform(x)
+
+                        return x, y.long()
+                dataset = get_dataset(dataset="camelyon17", download=True, root_dir="/bigtemp/fzv6en/gap_data/camelyon")
+                sensitive_train_set = SimpleCamelyonDataset(dataset.get_subset("train"))  # 来自医院 0,1,2,3
+                sensitive_test_set  = SimpleCamelyonDataset(dataset.get_subset("test"))
+
+                # sensitive_train_set = torchvision.datasets.ImageFolder(root=os.path.join(data_dir, "camelyon17_32", "train"), transform=transforms.ToTensor())
+                # sensitive_test_set = torchvision.datasets.ImageFolder(root=os.path.join(data_dir, "camelyon17_32", "test"), transform=transforms.ToTensor())
             elif data_name == "places365":
                 # _ = torchvision.datasets.Places365(root=data_dir, small=True, download=True)
                 resize_images(os.path.join(data_dir, "data_256_standard"), os.path.join(data_dir, "data_{}_standard".format(config.resolution)), (config.resolution, config.resolution))
@@ -404,6 +433,8 @@ def main(config):
                 max_idx = min(config.max_image, len(sensitive_train_set))
 
             transform_image = make_transform(config.transform, config.resolution, config.resolution)
+
+            data_dir = '/p/fzv6enresearch/gap/exp'
             
             if config.max_image is None:
                 max_idx = len(sensitive_train_set)

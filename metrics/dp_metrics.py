@@ -1,3 +1,5 @@
+
+
 class DPMetric(object):
 
 
@@ -5,11 +7,11 @@ class DPMetric(object):
 
         pass
 
-    def sensitive_data_load(self, dataloader, config):
+    def sensitive_data_load(self):
 
         pass
 
-    def public_model_load(self, dataloader, config):
+    def public_model_load(self):
 
         pass
 

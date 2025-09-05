@@ -1,6 +1,6 @@
 from metrics.dp_metrics import DPMetric
 
-class DPGAP(DPMetric):
+class DPFID(DPMetric):
 
     def __init__(self):
 
