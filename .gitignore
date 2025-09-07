@@ -88,4 +88,6 @@ resolution_query.py
 
 test_scripts.sh
 
+test_password.sh
+
 dm-lora
