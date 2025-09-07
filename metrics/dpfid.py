@@ -14,6 +14,6 @@ class DPFID(DPMetric):
 
         pass
 
-    def cal_metric(self):
+    def cal_metric(self, sensitive_dataset, public_model):
 
         pass
