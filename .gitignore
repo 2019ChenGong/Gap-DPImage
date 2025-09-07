@@ -86,4 +86,6 @@ models/dpsgd_diffusion_bad.py
 
 resolution_query.py
 
+test_scripts.sh
+
 dm-lora

@@ -376,8 +376,8 @@ def main(config):
 
                         return x, y.long()
                 dataset = get_dataset(dataset="camelyon17", download=True, root_dir="/bigtemp/fzv6en/gap_data/camelyon")
-                sensitive_train_set = SimpleCamelyonDataset(dataset.get_subset("train"))  # 来自医院 0,1,2,3
-                sensitive_test_set  = SimpleCamelyonDataset(dataset.get_subset("test"))
+                sensitive_train_set = SimpleCamelyonDataset(dataset.get_subset("train"), transform=transforms.ToTensor())  # 来自医院 0,1,2,3
+                sensitive_test_set  = SimpleCamelyonDataset(dataset.get_subset("test"), transform=transforms.ToTensor())
 
                 # sensitive_train_set = torchvision.datasets.ImageFolder(root=os.path.join(data_dir, "camelyon17_32", "train"), transform=transforms.ToTensor())
                 # sensitive_test_set = torchvision.datasets.ImageFolder(root=os.path.join(data_dir, "camelyon17_32", "test"), transform=transforms.ToTensor())

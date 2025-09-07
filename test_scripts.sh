@@ -8,3 +8,10 @@ python run.py setup.n_gpus_per_node=4 public_data.name=null model.ckpt=/p/fzv6en
 CUDA_VISIBLE_DEVICES=1 python eval.py -dn cifar10_32 -ep /p/fzv6enresearch/gap/exp/lora-cifar10-eps10
 
 # ln -s /bigtemp/fzv6en/gap_data/exp exp
+
+# sftp fzv6en@portal.cs.virginia.edu
+# QW870366er
+# sftp nkp2mr@login.hpc.virginia.edu
+# i69wjPrH1ISIh8b
+# sftp fzv6en@login.hpc.virginia.edu
+# QW870366ererererer
