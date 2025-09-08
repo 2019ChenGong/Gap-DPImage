@@ -1,4 +1,7 @@
 import os
+
+os.environ['HF_HOME'] = '/bigtemp/fzv6en/diffuser_cache'
+
 import sys
 import argparse
 import random
@@ -8,15 +11,17 @@ from metrics.load_sensitive_data import load_sensitive_data
 from metrics.load_public_model import load_public_model
 
 
-def main(args):
 
-    metrics = load_metrics(args.metrics)
+
+def main(args):
 
     sensitive_dataset = load_sensitive_data(args.sensitive_dataset)
 
     public_model = load_public_model(args.public_model)
 
-    results = metrics.cal_metric(args.sensitive_dataset, args.public_model)
+    metrics = load_metrics(args.metrics, sensitive_dataset, public_model, args.epsilon)
+
+    results = metrics.cal_metric()
 
     return
 

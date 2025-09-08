@@ -3,18 +3,16 @@
 class DPMetric(object):
 
 
-    def __init__(self):
+    def __init__(self, sensitive_dataset, public_model, epsilon):
 
-        pass
+        self.sensitive_dataset = sensitive_dataset
+        self.public_model = public_model
+        self.epsilon = epsilon
 
-    def sensitive_data_load(self):
+    def variant(self):
 
-        pass
+        return sensitive_dataset, variant_sensitive_dataset
 
-    def public_model_load(self):
-
-        pass
-
-    def cal_metric(self,sensitive_dataset, public_model):
+    def cal_metric(self):
 
         pass
