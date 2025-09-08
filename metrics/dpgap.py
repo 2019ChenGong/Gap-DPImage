@@ -6,6 +6,10 @@ class DPGAP(DPMetric):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
 
+    def variant(self):
+
+        pass
+
     def cal_metric(self):
 
         pass
