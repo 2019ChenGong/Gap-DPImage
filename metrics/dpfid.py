@@ -8,8 +8,20 @@ class DPFID(DPMetric):
 
     def variant(self):
 
-        pass
+        images = self.extract_images_from_dataloader(self.sensitive_dataset)
+        varied_images = self._image_variation(images)
+
+        return varied_images
 
     def cal_metric(self):
 
-        pass
+        print("🚀 Starting DPMetric calculation...")
+
+        extracted_images = self.extract_images_from_dataloader(self.sensitive_dataset, self.max_images)
+        print(f"📊 Extracted {len(extracted_images)} images")
+        
+        variations = self._image_variation(extracted_images)
+        print(f"📊 Variations shape: {variations.shape}")
+        
+        print("✅ DPMetric calculation completed!")
+        return variations

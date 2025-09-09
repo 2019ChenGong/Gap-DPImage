@@ -11,18 +11,19 @@ class DPMetric(object):
     def __init__(self, sensitive_dataset, public_model, epsilon):
         self.sensitive_dataset = sensitive_dataset
         self.public_model = public_model 
-        self._variation_batch_size = 64
+        self._variation_batch_size = 10
         self._variation_guidance_scale = 7.5
         self._variation_num_inference_steps = 50
         self.epsilon = epsilon
         self.device = "cuda"
-        self.max_images = 500
+        self.max_images = 10
         self.variation_degree = 0.75
     
     def _image_variation(self, images, size=512, variation_degree=None):
         variation_degree=self.variation_degree
+
         if images.shape[-1] != size:
-            images = F.interpolate(images, target_size=[size, size])
+            images = F.interpolate(images, size=[size, size])
 
         print(images.shape)
         max_batch_size = self._variation_batch_size
