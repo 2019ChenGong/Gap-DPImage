@@ -11,13 +11,13 @@ class DPMetric(object):
     def __init__(self, sensitive_dataset, public_model, epsilon):
         self.sensitive_dataset = sensitive_dataset
         self.public_model = public_model 
-        self._variation_batch_size = 10
+        self._variation_batch_size = 64
         self._variation_guidance_scale = 7.5
-        self._variation_num_inference_steps = 50
+        self._variation_num_inference_steps = 10
         self.epsilon = epsilon
         self.device = "cuda"
-        self.max_images = 10
-        self.variation_degree = 0.75
+        self.max_images = 5000
+        self.variation_degree = 0.3
     
     def _image_variation(self, images, size=512, variation_degree=None):
         variation_degree=self.variation_degree
