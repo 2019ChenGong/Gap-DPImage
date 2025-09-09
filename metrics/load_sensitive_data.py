@@ -52,7 +52,7 @@ def load_sensitive_data(dataset_name):
     sensitive_test_set = ImageFolderDataset(
             test_path, resolution, channel, use_labels=True)
 
-    batch_size = 4096
+    batch_size = 100
     
     # if config.eval.mode == "val":
     #     # split the sensitive dataset into training set and validation set
