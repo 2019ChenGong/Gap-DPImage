@@ -22,9 +22,9 @@ def main(args):
 
     metrics = load_metrics(args.metrics, sensitive_dataset, public_model, args.epsilon)
 
-    # metrics = DPMetric(sensitive_dataset, public_model, args.epsilon)
-
     results = metrics.cal_metric()
+
+    print(results)
 
     return
 
