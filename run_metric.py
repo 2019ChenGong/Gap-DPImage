@@ -33,7 +33,7 @@ if __name__ == '__main__':
 
     sys.path.append(os.getcwd())
     parser = argparse.ArgumentParser()
-    parser.add_argument('--public_model', default="stable-diffusion-2-1-base", help="[stable-diffusion-2-1-base, stable-diffusion-v1-5]")
+    parser.add_argument('--public_model', '-pm', default="stable-diffusion-v1-5", help="[stable-diffusion-2-1-base, stable-diffusion-v1-5]")
     parser.add_argument('--sensitive_dataset', '-sd', default="cifar10", help="[mnist, cifar10, covidx, celeba, camelyon]")
     parser.add_argument('--epsilon', '-e', default="0.01")
     parser.add_argument('--metrics', '-m', default="DPFID", help="[DPFID, DPGAP]")

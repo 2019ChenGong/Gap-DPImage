@@ -64,14 +64,15 @@ class DPFID(DPMetric):
 
         # Extract real images from dataloader
         extracted_images = self.extract_images_from_dataloader(self.sensitive_dataset, self.max_images)
-        print(f"📊 Extracted {len(extracted_images)} images")
+        print(f"📊 Extracted {len(extracted_images)} images, and extracted image shape: {extracted_images.shape}")
 
         # Generate variations
-        variations = self._image_variation(extracted_images)
-        print(f"📊 Variations shape: {variations.shape}")
+        original_images, variations = self._image_variation(extracted_images)
+        # variations = torch.from_numpy(variations)
+        print(f"📊 Original_images: {original_images.shape}; Variations shape: {variations.shape}")
 
         # Extract Inception V3 features
-        real_features = self._get_inception_features(extracted_images, is_tensor=True)
+        real_features = self._get_inception_features(original_images, is_tensor=True)
         generated_features = self._get_inception_features(variations, is_tensor=False)
 
         # Calculate FID

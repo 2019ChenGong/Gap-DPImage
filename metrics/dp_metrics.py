@@ -16,18 +16,19 @@ class DPMetric(object):
         self._variation_num_inference_steps = 10
         self.epsilon = epsilon
         self.device = "cuda"
-        self.max_images = 5000
+        self.max_images = 50
         self.variation_degree = 0.3
     
     def _image_variation(self, images, size=512, variation_degree=None):
         variation_degree=self.variation_degree
 
         if images.shape[-1] != size:
+            original_size = images.shape
             images = F.interpolate(images, size=[size, size])
 
-        print(images.shape)
         max_batch_size = self._variation_batch_size
         variations = []
+
         num_iterations = int(np.ceil(
             float(images.shape[0]) / max_batch_size))
         prompts = [''] * len(images)
@@ -42,9 +43,18 @@ class DPMetric(object):
                 guidance_scale=self._variation_guidance_scale,
                 num_images_per_prompt=1,
                 output_type='np').images)
-        variations = _round_to_uint8(np.concatenate(variations, axis=0))
+
+        # variations = np.concatenate(variations, axis=0)
+        # variations = torch.from_numpy(variations).permute(0, 3, 1, 2)
+        # variations = F.interpolate(variations, size=[original_size[2], original_size[3]])           
+
+        variations = images, self._round_to_uint8(np.concatenate(variations, axis=0))
 
         return variations
+
+    def _round_to_uint8(self, image):
+
+        return np.around(np.clip(image * 255, a_min=0, a_max=255)).astype(np.uint8)
 
     def extract_images_from_dataloader(self, dataloader, max_images=None):
 
@@ -53,6 +63,7 @@ class DPMetric(object):
         
         images = []
         current_count = 0
+
         
         for batch in dataloader:
             images.append(batch[0])
@@ -71,46 +82,12 @@ class DPMetric(object):
         print("🚀 Starting DPMetric calculation...")
 
         extracted_images = self.extract_images_from_dataloader(self.sensitive_dataset, self.max_images)
-        print(f"📊 Extracted {len(extracted_images)} images")
+        print(f"📊 Extracted {len(extracted_images)} images, and extracted image shape: {extracted_images.shape}")
         
-        variations = self._image_variation(extracted_images)
+        original_images, variations = self._image_variation(extracted_images)
         print(f"📊 Variations shape: {variations.shape}")
         
         print("✅ DPMetric calculation completed!")
         return variations
 
-def _round_to_uint8(image):
-    return np.around(np.clip(image * 255, a_min=0, a_max=255)).astype(np.uint8)
 
-if __name__ == "__main__":
-
-    import os
-    os.environ['HF_HOME'] = '/bigtemp/fzv6en/diffuser_cache'
-    import requests
-    import torch
-    from PIL import Image
-    from io import BytesIO
-    import numpy as np
-
-    from diffusers import StableDiffusionImg2ImgPipeline
-
-    device = "cuda"
-    model_id_or_path = "stable-diffusion-v1-5/stable-diffusion-v1-5"
-    pipe = StableDiffusionImg2ImgPipeline.from_pretrained(model_id_or_path, torch_dtype=torch.float16)
-    pipe = pipe.to(device)
-
-    url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
-
-    response = requests.get(url)
-    init_image = Image.open(BytesIO(response.content)).convert("RGB")
-
-
-    init_image = init_image.resize((512, 512))
-
-    init_image = np.array(init_image)
-    sensitive_dataset = np.stack([init_image] * 40, axis=0)
-    print(sensitive_dataset.shape)
-
-    model = DPMetric(sensitive_dataset=sensitive_dataset, public_model=pipe, epsilon=None)
-    _, variations = model.variant()
-    print(variations.shape)
