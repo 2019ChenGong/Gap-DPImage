@@ -54,33 +54,6 @@ def load_sensitive_data(dataset_name):
 
     batch_size = 100
     
-    # if config.eval.mode == "val":
-    #     # split the sensitive dataset into training set and validation set
-    #     if "mnist" in config.sensitive_data.name:
-    #         train_size = 55000
-    #     elif "cifar" in config.sensitive_data.name:
-    #         train_size = 45000
-    #     elif "eurosat" in config.sensitive_data.name:
-    #         train_size = 21000
-    #     elif "celeba" in config.sensitive_data.name:
-    #         train_size = 145064
-    #     elif "camelyon" in config.sensitive_data.name:
-    #         train_size = 269538
-    #     elif "covidx" in config.sensitive_data.name:
-    #         train_size = 67863
-    #     else:
-    #         raise NotImplementedError
-
-    # train_size = len(sensitive_train_set)
-    #     torch.manual_seed(0)
-    #     sensitive_train_set, sensitive_val_set = random_split(sensitive_train_set, [train_size, val_size])
-    #     sensitive_val_loader = torch.utils.data.DataLoader(dataset=sensitive_val_set, shuffle=False, drop_last=False, batch_size=config.eval.batch_size)
-    #     print("train size: {} val size: {}".format(len(sensitive_train_set), len(sensitive_val_set)))
-    # else:
-    #     sensitive_val_set = None
-    #     sensitive_val_loader = None
-    
-
     sensitive_train_loader = torch.utils.data.DataLoader(dataset=sensitive_train_set, shuffle=True, drop_last=False, batch_size=batch_size)
     sensitive_test_loader = torch.utils.data.DataLoader(dataset=sensitive_test_set, shuffle=False, drop_last=False, batch_size=batch_size)
 

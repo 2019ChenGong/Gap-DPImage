@@ -16,7 +16,7 @@ class DPMetric(object):
         self._variation_num_inference_steps = 10
         self.epsilon = epsilon
         self.device = "cuda"
-        self.max_images = 50
+        self.max_images = 100
         self.variation_degree = 0.3
     
     def _image_variation(self, images, size=512, variation_degree=None):

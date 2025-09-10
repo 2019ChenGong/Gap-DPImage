@@ -10,8 +10,6 @@ Part of code is borrowed from [DPImageBench](https://github.com/2019ChenGong/DPI
 
 ## Todo list
 
-- change to random in fid
-
 - multi gpus
 
 - resolutions
