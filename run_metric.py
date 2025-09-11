@@ -24,7 +24,7 @@ def main(args):
 
     # metrics = load_metrics(args.metrics, sensitive_dataset, public_model, args.epsilon)
 
-    results = metrics.cal_metric()
+    results = metrics.cal_metric(args.save_dir)
 
     print(results)
 
@@ -39,6 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--sensitive_dataset', '-sd', default="cifar10", help="[mnist, cifar10, covidx, celeba, camelyon]")
     parser.add_argument('--epsilon', '-e', default="0.01")
     parser.add_argument('--metrics', '-m', default="DPFID", help="[DPFID, DPGAP]")
+    parser.add_argument('--save_dir', '-s_d', default="exp/test", help="the path used to store the variant images")
     parser.add_argument('--exp_description', '-ed', default="")
 
     args = parser.parse_args()

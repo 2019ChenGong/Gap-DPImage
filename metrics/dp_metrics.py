@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
 
+from datetime import datetime
+
 def image_variation_batch(rank, dataloader, args):
     size = args.size
     world_size = args.world_size
@@ -25,7 +27,11 @@ def image_variation_batch(rank, dataloader, args):
     device = torch.device(f"cuda:{rank}")
 
     total_processed = 0
-    rank_save_dir = os.path.join(save_dir, f"rank_{rank}")
+
+    current_time = datetime.now()
+    formatted_time = current_time.strftime("%Y-%m-%d-%H-%M-%S")
+
+    rank_save_dir = os.path.join(save_dir, formatted_time)
     os.makedirs(rank_save_dir, exist_ok=True)
     model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     model = model.to(device)
@@ -75,7 +81,7 @@ class DPMetric(object):
         self.epsilon = epsilon
         self.device = "cuda"
         self.max_images = 200
-        self.variation_degree = 0.3
+        self.variation_degree = 0.1
 
     def _image_variation(self, dataloader, save_dir, size=512, max_images=100):
         os.makedirs(save_dir, exist_ok=True)
@@ -96,7 +102,6 @@ class DPMetric(object):
 
         dataset = ImageFolder(save_dir, transform=transforms.ToTensor())
         return DataLoader(dataset, batch_size=10)
-        
 
     def _round_to_uint8(self, image):
 
@@ -124,13 +129,13 @@ class DPMetric(object):
         return images * 2 - 1
 
 
-    def cal_metric(self):
+    def cal_metric(self, save_dir):
         print("🚀 Starting DPMetric calculation...")
 
         # extracted_images = self.extract_images_from_dataloader(self.sensitive_dataset, self.max_images)
         # print(f"📊 Extracted {len(extracted_images)} images, and extracted image shape: {extracted_images.shape}")
         
-        save_dir = 'exp/test'
+        save_dir = save_dir
         variations_dataset = self._image_variation(self.sensitive_dataset, save_dir, max_images=self.max_images)
         print(f"📊 Variations num: {len(variations_dataset.dataset)}")
         
