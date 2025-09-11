@@ -20,7 +20,9 @@ def main(args):
 
     public_model = load_public_model(args.public_model)
 
-    metrics = load_metrics(args.metrics, sensitive_dataset, public_model, args.epsilon)
+    metrics = DPMetric(sensitive_dataset, public_model, None)
+
+    # metrics = load_metrics(args.metrics, sensitive_dataset, public_model, args.epsilon)
 
     results = metrics.cal_metric()
 

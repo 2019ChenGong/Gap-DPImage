@@ -67,6 +67,8 @@ class DPFID(DPMetric):
         print(f"📊 Extracted {len(extracted_images)} images, and extracted image shape: {extracted_images.shape}")
 
         # Generate variations
+        save_dir = 'test'
+        variations = self._image_variation(self.sensitive_dataset, save_dir)
         original_images, variations = self._image_variation(extracted_images)
         # variations = torch.from_numpy(variations)
         print(f"📊 Original_images: {original_images.shape}; Variations shape: {variations.shape}")
