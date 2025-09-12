@@ -27,11 +27,7 @@ def image_variation_batch(rank, dataloader, args):
     device = torch.device(f"cuda:{rank}")
 
     total_processed = 0
-
-    current_time = datetime.now()
-    formatted_time = current_time.strftime("%Y-%m-%d-%H-%M-%S")
-
-    rank_save_dir = os.path.join(save_dir, formatted_time)
+    rank_save_dir = os.path.join(save_dir, f"rank_{rank}")
     os.makedirs(rank_save_dir, exist_ok=True)
     model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     model = model.to(device)
@@ -107,6 +103,12 @@ class DPMetric(object):
 
         return np.around(np.clip(image * 255, a_min=0, a_max=255)).astype(np.uint8)
 
+    def get_time(self):
+
+        current_time = datetime.now()
+        return current_time.strftime("%Y-%m-%d-%H-%M-%S")
+
+
     def extract_images_from_dataloader(self, dataloader, max_images=None):
 
         if max_images is None:
@@ -115,7 +117,6 @@ class DPMetric(object):
         images = []
         current_count = 0
 
-        
         for batch in dataloader:
             images.append(batch[0])
             current_count += images[-1].shape[0]
@@ -129,13 +130,12 @@ class DPMetric(object):
         return images * 2 - 1
 
 
-    def cal_metric(self, save_dir):
+    def cal_metric(self, args):
         print("🚀 Starting DPMetric calculation...")
 
-        # extracted_images = self.extract_images_from_dataloader(self.sensitive_dataset, self.max_images)
-        # print(f"📊 Extracted {len(extracted_images)} images, and extracted image shape: {extracted_images.shape}")
-        
-        save_dir = save_dir
+        time = self.get_time()
+      
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
         variations_dataset = self._image_variation(self.sensitive_dataset, save_dir, max_images=self.max_images)
         print(f"📊 Variations num: {len(variations_dataset.dataset)}")
         

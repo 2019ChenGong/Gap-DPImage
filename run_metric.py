@@ -24,7 +24,7 @@ def main(args):
 
     # metrics = load_metrics(args.metrics, sensitive_dataset, public_model, args.epsilon)
 
-    results = metrics.cal_metric(args.save_dir)
+    results = metrics.cal_metric(args)
 
     print(results)
 

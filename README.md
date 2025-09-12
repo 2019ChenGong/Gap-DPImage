@@ -15,3 +15,5 @@ Part of code is borrowed from [DPImageBench](https://github.com/2019ChenGong/DPI
 - resolutions
 
 - out of memeroy
+
+- use a npz to store
