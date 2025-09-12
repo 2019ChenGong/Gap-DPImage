@@ -10,10 +10,10 @@ Part of code is borrowed from [DPImageBench](https://github.com/2019ChenGong/DPI
 
 ## Todo list
 
-- multi gpus
-
-- resolutions
-
-- out of memeroy
-
 - use a npz to store
+
+- public model ++
+
+- resize to 256
+
+- FID

@@ -17,7 +17,8 @@ from datetime import datetime
 def image_variation_batch(rank, dataloader, args):
     size = args.size
     world_size = args.world_size
-    save_dir = args.save_dir
+    variation_save_dir = args.variation_save_dir
+    original_save_dir = args.original_save_dir
     max_images = args.max_images
     variation_degree = args.variation_degree
     _variation_num_inference_steps = args._variation_num_inference_steps
@@ -27,10 +28,13 @@ def image_variation_batch(rank, dataloader, args):
     device = torch.device(f"cuda:{rank}")
 
     total_processed = 0
-    rank_save_dir = os.path.join(save_dir, f"rank_{rank}")
-    os.makedirs(rank_save_dir, exist_ok=True)
+    rank_save_dir_variation = os.path.join(variation_save_dir, f"rank_{rank}")
+    rank_save_dir_original = os.path.join(original_save_dir, f"rank_{rank}")
+    os.makedirs(rank_save_dir_variation, exist_ok=True)
+    os.makedirs(rank_save_dir_original, exist_ok=True)
     model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     model = model.to(device)
+    model.safety_checker = None
     model.requires_safety_checker = False
     count = 0
     for images, _ in dataloader:
@@ -40,15 +44,13 @@ def image_variation_batch(rank, dataloader, args):
         local_indices = indices[rank::world_size]
         if len(local_indices) == 0:
             continue
-        local_images = images[local_indices].to(device) * 2 - 1
+        local_images = images[local_indices]
         original_size = local_images.shape[-2:]  # (H, W)
-        if local_images.shape[-1] != size:
-            local_images = F.interpolate(local_images, size=[size, size])
         prompts = [''] * len(local_images)
 
         variations = model(
             prompt=prompts,
-            image=local_images,
+            image=F.interpolate(local_images, size=[size, size]).to(device) * 2 - 1,
             num_inference_steps=_variation_num_inference_steps,
             strength=variation_degree,
             guidance_scale=_variation_guidance_scale,
@@ -59,8 +61,9 @@ def image_variation_batch(rank, dataloader, args):
         variations = F.interpolate(variations, size=original_size)
         total_processed += batch_size
 
-        for var in variations:
-            save_image(var, os.path.join(rank_save_dir, f'{count}.png'))
+        for i in range(len(variations)):
+            save_image(variations[i], os.path.join(rank_save_dir_variation, f'{count}.png'))
+            save_image(local_images[i], os.path.join(rank_save_dir_original, f'{count}.png'))
             count += 1
 
         if total_processed >= max_images:
@@ -83,7 +86,10 @@ class DPMetric(object):
         os.makedirs(save_dir, exist_ok=True)
         args = argparse.Namespace()
         args.size = size
-        args.save_dir = save_dir
+        args.variation_save_dir = os.path.join(save_dir, 'variation')
+        args.original_save_dir = os.path.join(save_dir, 'original')
+        os.makedirs(args.variation_save_dir, exist_ok=True)
+        os.makedirs(args.original_save_dir, exist_ok=True)
         args.max_images = max_images
         args.variation_degree = self.variation_degree
         args._variation_num_inference_steps = self._variation_num_inference_steps
@@ -96,8 +102,9 @@ class DPMetric(object):
 
         spawn(image_variation_batch, args=(dataloader, args), nprocs=world_size, join=True)
 
-        dataset = ImageFolder(save_dir, transform=transforms.ToTensor())
-        return DataLoader(dataset, batch_size=10)
+        original_dataset = ImageFolder(args.original_save_dir, transform=transforms.ToTensor())
+        variation_dataset = ImageFolder(args.variation_save_dir, transform=transforms.ToTensor())
+        return DataLoader(original_dataset, batch_size=10, shuffle=False), DataLoader(variation_dataset, batch_size=10, shuffle=False)
 
     def _round_to_uint8(self, image):
 
@@ -136,10 +143,10 @@ class DPMetric(object):
         time = self.get_time()
       
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
-        variations_dataset = self._image_variation(self.sensitive_dataset, save_dir, max_images=self.max_images)
+        origianl_dataset, variations_dataset = self._image_variation(self.sensitive_dataset, save_dir, max_images=self.max_images)
         print(f"📊 Variations num: {len(variations_dataset.dataset)}")
         
         print("✅ DPMetric calculation completed!")
-        return variations_dataset
+        return origianl_dataset, variations_dataset
 
 
