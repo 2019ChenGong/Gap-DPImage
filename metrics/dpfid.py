@@ -6,6 +6,9 @@ from torchvision.models import inception_v3
 from torchvision.transforms import functional as F
 from scipy import linalg 
 
+import os
+import shutil
+
 class DPFID(DPMetric):
 
     def __init__(self, sensitive_dataset, public_model, epsilon):
@@ -29,15 +32,8 @@ class DPFID(DPMetric):
 
     def _get_inception_features(self, images, is_tensor=True, batch_size=64):
         features = []
-        # num_images = images.shape[0]
-        # num_batches = int(np.ceil(num_images / batch_size))
 
         with torch.no_grad():
-            # for i in range(num_batches):
-            #     batch = images[i * batch_size: (i + 1) * batch_size]
-            #     batch = self._preprocess_images(batch, is_tensor=is_tensor)
-            #     feats = self.inception_model(batch).cpu().numpy()
-            #     features.append(feats)
             
             for batch, _ in images:
                 batch = self._preprocess_images(batch, is_tensor=is_tensor)
@@ -68,14 +64,9 @@ class DPFID(DPMetric):
         print("🚀 Starting DPMetric calculation...")
 
         time = self.get_time()
-        # save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
-
-        # Extract real images from dataloader
-        # extracted_images = self.extract_images_from_dataloader(self.sensitive_dataset, self.max_images)
-        # print(f"📊 Extracted {len(extracted_images)} images, and extracted image shape: {extracted_images.shape}")
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
         # Generate variations
-        save_dir = 'exp/test'
         # variations = self._image_variation(self.sensitive_dataset, save_dir)
         original_dataloader, variations_dataloader = self._image_variation(self.sensitive_dataset, save_dir)
         # variations = torch.from_numpy(variations)
@@ -87,7 +78,24 @@ class DPFID(DPMetric):
 
         # Calculate FID
         fid_score = self._calculate_fid(real_features, generated_features)
-        print(f"✅ FID Score: {fid_score}")
 
-        print("✅ DPMetric calculation completed!")
+        print(f"📊 Public model: {args.public_model}")
+        print(f"📊 Sensitive dataset: {args.sensitive_dataset}")
+        print(f"✅ FID Score: {fid_score}")
+        
+
+        if self.is_delete_variations:
+            try:
+                if os.path.exists(save_dir):
+                    shutil.rmtree(save_dir)  # Recursively delete the directory and its contents
+                    print(f"🗑️ Deleted directory: {save_dir}")
+                else:
+                    print(f"ℹ️ Directory {save_dir} does not exist, no deletion needed.")
+            except Exception as e:
+                print(f"⚠️ Error deleting directory {save_dir}: {e}")
+            print("✅ DPMetric calculation completed!")
+
+        else:
+            print("✅ DPMetric calculation completed!")
+
         return fid_score
