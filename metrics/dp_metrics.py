@@ -89,12 +89,11 @@ class DPMetric(object):
         self.epsilon = epsilon
         self.device = "cuda"
         self.max_images = 50000
-        self.variation_degree = 0.15
+        self.variation_degree = 0.2
         self.is_delete_variations = True
+        self.dataloader_size = 32
 
     def _image_variation(self, dataloader, save_dir, size=512, max_images=100):
-
-        max_images = self.max_images
 
         os.makedirs(save_dir, exist_ok=True)
         args = argparse.Namespace()
@@ -117,7 +116,7 @@ class DPMetric(object):
 
         original_dataset = ImageFolder(args.original_save_dir, transform=transforms.ToTensor())
         variation_dataset = ImageFolder(args.variation_save_dir, transform=transforms.ToTensor())
-        return DataLoader(original_dataset, batch_size=10, shuffle=False), DataLoader(variation_dataset, batch_size=10, shuffle=False)
+        return DataLoader(original_dataset, batch_size=self.dataloader_size, shuffle=False), DataLoader(variation_dataset, batch_size=self.dataloader_size, shuffle=False)
 
     def _round_to_uint8(self, image):
 

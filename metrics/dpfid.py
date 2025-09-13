@@ -61,14 +61,14 @@ class DPFID(DPMetric):
         return fid
 
     def cal_metric(self, args):
-        print("🚀 Starting DPMetric calculation...")
+        print("🚀 Starting DPFID calculation...")
 
         time = self.get_time()
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
         # Generate variations
         # variations = self._image_variation(self.sensitive_dataset, save_dir)
-        original_dataloader, variations_dataloader = self._image_variation(self.sensitive_dataset, save_dir)
+        original_dataloader, variations_dataloader = self._image_variation(self.sensitive_dataset, save_dir, max_images=self.max_images)
         # variations = torch.from_numpy(variations)
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations shape: {len(variations_dataloader.dataset)}")
 
@@ -93,9 +93,9 @@ class DPFID(DPMetric):
                     print(f"ℹ️ Directory {save_dir} does not exist, no deletion needed.")
             except Exception as e:
                 print(f"⚠️ Error deleting directory {save_dir}: {e}")
-            print("✅ DPMetric calculation completed!")
+            print("✅ DPFID calculation completed!")
 
         else:
-            print("✅ DPMetric calculation completed!")
+            print("✅ DPFID calculation completed!")
 
         return fid_score

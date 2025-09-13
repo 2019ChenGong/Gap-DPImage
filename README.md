@@ -15,5 +15,3 @@ Part of code is borrowed from [DPImageBench](https://github.com/2019ChenGong/DPI
 - public model ++
 
 - resize to 256
-
-- time 

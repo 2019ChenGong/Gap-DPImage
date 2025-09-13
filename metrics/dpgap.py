@@ -4,6 +4,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+import os
+import shutil
+
 class DPGAP(DPMetric):
 
     def __init__(self, sensitive_dataset, public_model, epsilon):
@@ -69,7 +72,7 @@ class DPGAP(DPMetric):
                 return output1, output2
 
         # Instantiate and return the network
-        return FixedRandomNet(self._variation_batch_size, self.image_height, self.image_width, self.vec_size)
+        return FixedRandomNet(self.dataloader_size, self.image_height, self.image_width, self.vec_size)
 
     def svd_decomposition(self, variant_output, original_output, n_dim=None):
         if n_dim is None:
@@ -99,15 +102,15 @@ class DPGAP(DPMetric):
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
         # Generate variations
-        original_dataloader, variations_dataloader = self._image_variation(self.sensitive_dataset, save_dir)
+        original_dataloader, variations_dataloader = self._image_variation(self.sensitive_dataset, save_dir, max_images=self.max_images)
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations shape: {len(variations_dataloader.dataset)}")
 
-        random_model = self.random_network()
+        random_model = self.random_network().to(self.device)
 
         # Process dataloaders in batches
         variant_outputs = []
         original_outputs = []
-        
+
         with torch.no_grad():
             for (var_batch, _), (orig_batch, _) in zip(variations_dataloader, original_dataloader):
                 var_batch = var_batch.to(self.device)
