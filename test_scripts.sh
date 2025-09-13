@@ -10,4 +10,7 @@ CUDA_VISIBLE_DEVICES=1 python eval.py -dn cifar10_32 -ep /p/fzv6enresearch/gap/e
 # DP metrics
 python run_metric.py -m DPFID -pm stable-diffusion-2-1-base -sd cifar10
 
+python run_metric.py -m DPGAP -pm stable-diffusion-2-1-base -sd cifar10
+
+
 # ln -s /bigtemp/fzv6en/gap_data/exp exp

@@ -11,14 +11,23 @@ class DPGAP(DPMetric):
         super().__init__(sensitive_dataset, public_model, epsilon)
 
         self.n_dim = 10
+        self.vec_size = self.max_images
+        self.sensitive_dataset = sensitive_dataset
+
+        for batch, _ in self.sensitive_dataset:
+            self.image_height = batch.shape[2]
+            self.image_width = batch.shape[3]
+            break
+
 
     def random_network(self):
         torch.manual_seed(42)
 
         class FixedRandomNet(nn.Module):
-            def __init__(self, batch_size, image_height, image_width):
+            def __init__(self, batch_size, image_height, image_width, vec_size):
                 super(FixedRandomNet, self).__init__()
                 self.batch_size = batch_size
+                self.vec_size = vec_size
 
                 # Convolutional block for feature extraction (shared for both inputs)
                 self.conv_block = nn.Sequential(
@@ -40,7 +49,7 @@ class DPGAP(DPMetric):
                 self.fc = nn.Sequential(
                     nn.Linear(self.feature_dim, 512),
                     nn.ReLU(),
-                    nn.Linear(512, self.batch_size)  # Output N-dim vector for variations
+                    nn.Linear(512, self.vec_size) 
                 )
 
                 # Fix weights to be non-trainable
@@ -52,29 +61,15 @@ class DPGAP(DPMetric):
                     param.requires_grad = False
 
             def forward(self, input1, input2):
-                """
-                Forward pass.
-                input1: (N, 3, H, W) - variations
-                input2: (N, 3, H, W) - original_images
-                Returns: Tuple of two tensors (output1, output2), each of shape (N, N)
-                """
-                # Extract features
-                feat1 = self.conv_block(input1).view(input1.size(0), -1)  # Shape: (N, feature_dim)
-                feat2 = self.conv_block(input2).view(input2.size(0), -1)  # Shape: (N, feature_dim)
-
-                # Process each feature set separately
-                output1 = self.fc(feat1)  # Shape: (N, N)
-                output2 = self.fc(feat2)  # Shape: (N, N)
+                feat1 = self.conv_block(input1).view(input1.size(0), -1)
+                feat2 = self.conv_block(input2).view(input2.size(0), -1)
+                output1 = self.fc(feat1)
+                output2 = self.fc(feat2)
 
                 return output1, output2
 
-        # Get batch size, height, and width from variations (assuming it's set in cal_metric)
-        batch_size = self.variations.shape[0]
-        image_height = self.variations.shape[1]
-        image_width = self.variations.shape[2]
-
         # Instantiate and return the network
-        return FixedRandomNet(batch_size, image_height, image_width)
+        return FixedRandomNet(self._variation_batch_size, self.image_height, self.image_width, self.vec_size)
 
     def svd_decomposition(self, variant_output, original_output, n_dim=None):
         if n_dim is None:
@@ -96,32 +91,54 @@ class DPGAP(DPMetric):
 
         return distance
 
-    def cal_metric(self):
+    def cal_metric(self, args):
 
-        print("🚀 Starting DPMetric calculation...")
+        print("🚀 Starting DPGap calculation...")
 
-        # Extract real images from dataloader
-        extracted_images = self.extract_images_from_dataloader(self.sensitive_dataset, self.max_images)
-        print(f"📊 Extracted {len(extracted_images)} images, and extracted image shape: {extracted_images.shape}")
+        time = self.get_time()
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
         # Generate variations
-        original_images, variations = self._image_variation(extracted_images)
-        print(f"📊 Variations shape: {variations.shape}, and Orignial shape: {original_images.shape}")
-
-        self.variations = variations
-
-        variations_tensor = torch.from_numpy(variations).float().permute(0, 3, 1, 2)
+        original_dataloader, variations_dataloader = self._image_variation(self.sensitive_dataset, save_dir)
+        print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations shape: {len(variations_dataloader.dataset)}")
 
         random_model = self.random_network()
 
-        # variant_output: torch.Size([self.max_images, self.max_images])
+        # Process dataloaders in batches
+        variant_outputs = []
+        original_outputs = []
+        
         with torch.no_grad():
-            variant_output, original_output = random_model(variations_tensor, original_images)
+            for (var_batch, _), (orig_batch, _) in zip(variations_dataloader, original_dataloader):
+                var_batch = var_batch.to(self.device)
+                orig_batch = orig_batch.to(self.device)
+                var_out, orig_out = random_model(var_batch, orig_batch)
+                variant_outputs.append(var_out)
+                original_outputs.append(orig_out)
+
+        # Concatenate outputs
+        variant_output = torch.cat(variant_outputs, dim=0)
+        original_output = torch.cat(original_outputs, dim=0)
 
         print(f"Variations output matrix shape: {variant_output.shape}")
         print(f"Original images output matrix shape: {original_output.shape}")
 
         result = self.svd_decomposition(variant_output, original_output, self.n_dim)
 
+        if self.is_delete_variations:
+            try:
+                if os.path.exists(save_dir):
+                    shutil.rmtree(save_dir)  # Recursively delete the directory and its contents
+                    print(f"🗑️ Deleted directory: {save_dir}")
+                else:
+                    print(f"ℹ️ Directory {save_dir} does not exist, no deletion needed.")
+            except Exception as e:
+                print(f"⚠️ Error deleting directory {save_dir}: {e}")
+            print("✅ DPGap calculation completed!")
+
+        else:
+            print("✅ DPGap calculation completed!")
+
         return result
+    
 

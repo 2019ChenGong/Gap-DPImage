@@ -15,7 +15,7 @@ from torchvision import transforms
 from datetime import datetime
 
 def image_variation_batch(rank, dataloader, args):
-    
+
     size = args.size
     world_size = args.world_size
     variation_save_dir = args.variation_save_dir
@@ -37,7 +37,11 @@ def image_variation_batch(rank, dataloader, args):
     model = model.to(device)
     model.safety_checker = None
     model.requires_safety_checker = False
+    model.set_progress_bar_config(disable=True)
     count = 0
+
+    if rank == 0:
+        pbar = tqdm(total=max_images, desc="Generating variations", unit="img")
 
     for images, _ in dataloader:
         batch_size = images.shape[0]
@@ -67,6 +71,9 @@ def image_variation_batch(rank, dataloader, args):
             save_image(variations[i], os.path.join(rank_save_dir_variation, f'{count}.png'))
             save_image(local_images[i], os.path.join(rank_save_dir_original, f'{count}.png'))
             count += 1
+        
+        if rank == 0:
+            pbar.update(batch_size)
 
         if total_processed >= max_images:
             break
@@ -81,8 +88,8 @@ class DPMetric(object):
         self._variation_num_inference_steps = 10
         self.epsilon = epsilon
         self.device = "cuda"
-        self.max_images = 100
-        self.variation_degree = 0.2
+        self.max_images = 50000
+        self.variation_degree = 0.15
         self.is_delete_variations = True
 
     def _image_variation(self, dataloader, save_dir, size=512, max_images=100):

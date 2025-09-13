@@ -17,7 +17,3 @@ Part of code is borrowed from [DPImageBench](https://github.com/2019ChenGong/DPI
 - resize to 256
 
 - time 
-
-- unique folder
-
-- delete images after calculating
