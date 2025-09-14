@@ -51,6 +51,8 @@ def image_variation_batch(rank, dataloader, args):
         if len(local_indices) == 0:
             continue
         local_images = images[local_indices]
+        if local_images.shape[1] == 1:
+            local_images = local_images.repeat(1, 3, 1, 1)
         original_size = local_images.shape[-2:]  # (H, W)
         prompts = [''] * len(local_images)
 
@@ -88,8 +90,8 @@ class DPMetric(object):
         self._variation_num_inference_steps = 10
         self.epsilon = epsilon
         self.device = "cuda"
-        self.max_images = 50000
-        self.variation_degree = 0.2
+        self.max_images = 20000
+        self.variation_degree = 0.1
         self.is_delete_variations = True
         self.dataloader_size = 32
 

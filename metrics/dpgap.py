@@ -13,7 +13,7 @@ class DPGAP(DPMetric):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
 
-        self.n_dim = 10
+        self.n_dim = 32
         self.vec_size = self.max_images
         self.sensitive_dataset = sensitive_dataset
 

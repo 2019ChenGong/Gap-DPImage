@@ -19,7 +19,7 @@ def obtain_path(dataset_name):
 
     elif dataset_name == 'covidx':
         train_path = 'dataset/covidx-cxr4/train_512.zip'
-        test_path =  'dataset/covidx-cxr4/test_512.zip'
+        test_path =  'dataset/covidx-cxr4/train_512.zip'
         resolution = 512
         channel = 3
 
@@ -30,9 +30,9 @@ def obtain_path(dataset_name):
         channel = 3
 
     elif dataset_name == 'camelyon':
-        train_path = 'dataset/covidx-cxr4/train_512.zip'
-        test_path =  'dataset/covidx-cxr4/test_512.zip'
-        resolution = 64
+        train_path = 'exp/train_96.zip'
+        test_path =  'exp/test_96.zip'
+        resolution = 96
         channel = 3
 
     else:
