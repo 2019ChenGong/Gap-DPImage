@@ -13,7 +13,7 @@ class DPGAP(DPMetric):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
 
-        self.n_dim = 32
+        self.n_dim = 12
         self.vec_size = self.max_images
         self.sensitive_dataset = sensitive_dataset
 
@@ -127,6 +127,10 @@ class DPGAP(DPMetric):
         print(f"Original images output matrix shape: {original_output.shape}")
 
         result = self.svd_decomposition(variant_output, original_output, self.n_dim)
+
+        print(f"📊 Public model: {args.public_model}")
+        print(f"📊 Sensitive dataset: {args.sensitive_dataset}")
+        print(f"✅ DPGap Score: {result}")
 
         if self.is_delete_variations:
             try:

@@ -2,13 +2,25 @@ import torch
 import random
 from torch.utils.data import random_split, TensorDataset, Dataset, DataLoader, ConcatDataset
 from data.stylegan3.dataset import ImageFolderDataset
+from models.DP_LDM.ldm.util import instantiate_from_config
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
+from omegaconf import OmegaConf
 
 import os
 
 os.environ['HF_HOME'] = '/bigtemp/fzv6en/diffuser_cache'
 
-def load_public_model(public_model):  
+def load_ldm_model_from_config(config, ckpt):
+    print(f"Loading model from {ckpt}")
+    pl_sd = torch.load(ckpt, weights_only=False)  # , map_location="cpu")
+    sd = pl_sd["state_dict"]
+    model = instantiate_from_config(config.model)
+    m, u = model.load_state_dict(sd, strict=False)
+    model.cuda()
+    model.eval()
+    return model
+
+def load_public_model(public_model):
 
     if public_model == 'stable-diffusion-2-1-base':
         print(f"Loading model: {public_model}")
@@ -55,6 +67,16 @@ def load_public_model(public_model):
         model.safety_checker = None
         model.requires_safety_checker = False
         model.model_id = model_id
+        print(f"Loading done!")
+    elif public_model == 'dpimagebench-ldm':
+        print(f"Loading model: {public_model}")
+        config_path = '/p/fzv6enresearch/gap/models/DP_LDM/configs/finetuning/32_4M.yaml'
+        ckpt = '/p/fzv6enresearch/gap/exp/2024-12-11T11-06-26_imagenet32-conditional_ours/checkpoints/last.ckpt'
+        configs = [OmegaConf.load(config_path)]
+        config = OmegaConf.merge(*configs)
+        model = load_ldm_model_from_config(config, ckpt)
+        model.bench_config = config
+        model.ckpt_path = ckpt
         print(f"Loading done!")
     else:
         print(f"Error: '{public_model}' is not a valid public model.")

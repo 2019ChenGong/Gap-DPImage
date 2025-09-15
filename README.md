@@ -10,8 +10,8 @@ Part of code is borrowed from [DPImageBench](https://github.com/2019ChenGong/DPI
 
 ## Todo list
 
-- use a npz to store
-
 - public model ++
 
 - resize to 256
+
+- ldm

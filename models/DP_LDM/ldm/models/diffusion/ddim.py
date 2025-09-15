@@ -52,6 +52,58 @@ class DDIMSampler(object):
                         1 - self.alphas_cumprod / self.alphas_cumprod_prev))
         self.register_buffer('ddim_sigmas_for_original_num_steps', sigmas_for_original_sampling_steps)
 
+
+    @torch.no_grad()
+    def regenerate_image(self, x0, start_timestep=500, S=50, conditioning=None, **kwargs):
+        device = x0.device
+        b = x0.shape[0]
+
+        if conditioning is None:
+            xc = torch.tensor([0])
+            c = self.model.get_learned_conditioning({self.model.cond_stage_key: xc.to(device)})
+            conditioning = c.repeat(b, 1, 1)
+
+        # Step 1: q_sample to start_timestep
+        t_tensor = torch.full((b,), start_timestep, device=device, dtype=torch.long)
+        x_T = self.model.q_sample(x0, t_tensor)
+
+        # Step 2: Create custom DDIM timesteps subset
+        # full_ddim_timesteps = self.ddim_timesteps  # [T,], descending, e.g., [999, 989, ..., 0]
+
+        # Find the index where timestep <= start_timestep (we want the first one that is <=)
+        # Actually, we want the closest timestep that is <= start_timestep
+        # Since ddim_timesteps is sorted descending, we find first index where value <= start_timestep
+        # mask = full_ddim_timesteps <= start_timestep
+        # if not mask.any():
+        #     start_index = 0  # fallback
+        # else:
+        #     start_index = mask.nonzero(as_tuple=True)[0][0].item()
+
+        # # Take ddim_steps steps from start_index onward (moving toward 0)
+        # end_index = start_index + ddim_steps
+        # if end_index > len(full_ddim_timesteps):
+        #     end_index = len(full_ddim_timesteps)
+        #     start_index = max(0, end_index - ddim_steps)  # adjust if near end
+
+        # subset_timesteps = full_ddim_timesteps[start_index:end_index]  # descending: [500, 490, 480...]
+        # subset_timesteps = torch.flip(subset_timesteps, dims=[0])      # ascending: [480, 490, 500] → will be flipped back in ddim_sampling
+
+        # print(f"Regenerating from timestep {start_timestep} using DDIM steps: {subset_timesteps.flip(0).cpu().numpy()}")
+
+        # Step 3: Sample with custom timesteps
+        samples, intermediates = self.sample(
+            S=S,
+            batch_size=b,
+            shape=x0.shape[1:],
+            conditioning=conditioning,
+            x_T=x_T,
+            timesteps=start_timestep,  # ←←← 关键：告诉采样器正确的起始点和轨迹
+            eta=0.0,
+            verbose=False,
+            **kwargs
+        )
+        return samples, intermediates
+
     @torch.no_grad()
     def sample(self,
                S,
@@ -65,6 +117,7 @@ class DDIMSampler(object):
                eta=0.,
                mask=None,
                x0=None,
+               timesteps=None,
                temperature=1.,
                noise_dropout=0.,
                score_corrector=None,
@@ -106,6 +159,7 @@ class DDIMSampler(object):
                                                     log_every_t=log_every_t,
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
+                                                    timesteps=timesteps,
                                                     )
         return samples, intermediates
 

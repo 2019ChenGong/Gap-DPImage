@@ -13,6 +13,8 @@ from torchvision.datasets import ImageFolder
 from torchvision import transforms
 
 from datetime import datetime
+from metrics.load_public_model import load_public_model
+from models.DP_LDM.ldm.models.diffusion.ddim import DDIMSampler
 
 def image_variation_batch(rank, dataloader, args):
 
@@ -80,6 +82,70 @@ def image_variation_batch(rank, dataloader, args):
         if total_processed >= max_images:
             break
 
+
+def image_variation_batch_ldm(rank, dataloader, args):
+
+    size = 32
+    world_size = args.world_size
+    variation_save_dir = args.variation_save_dir
+    original_save_dir = args.original_save_dir
+    max_images = args.max_images
+    variation_degree = args.variation_degree
+    _variation_num_inference_steps = args._variation_num_inference_steps
+    _variation_guidance_scale = args._variation_guidance_scale
+
+    torch.cuda.set_device(rank)
+    device = torch.device(f"cuda:{rank}")
+
+    total_processed = 0
+    rank_save_dir_variation = os.path.join(variation_save_dir, f"rank_{rank}")
+    rank_save_dir_original = os.path.join(original_save_dir, f"rank_{rank}")
+    os.makedirs(rank_save_dir_variation, exist_ok=True)
+    os.makedirs(rank_save_dir_original, exist_ok=True)
+    model = load_public_model('dpimagebench-ldm')
+    model = model.to(device)
+    sampler = DDIMSampler(model)
+
+    def var_func(images):
+        encoder_posterior = model.encode_first_stage(images.to(device))
+        z = model.get_first_stage_encoding(encoder_posterior).detach()
+        z, _ = sampler.regenerate_image(z, S=_variation_num_inference_steps, start_timestep=int(_variation_num_inference_steps*variation_degree))
+        output = model.decode_first_stage(z)
+        return torch.clamp(output/2+0.5, min=0.0, max=1.0)
+
+    count = 0
+
+    if rank == 0:
+        pbar = tqdm(total=max_images, desc="Generating variations", unit="img")
+
+    for images, _ in dataloader:
+        batch_size = images.shape[0]
+        indices = list(range(batch_size))
+
+        local_indices = indices[rank::world_size]
+        if len(local_indices) == 0:
+            continue
+        local_images = images[local_indices]
+        if local_images.shape[1] == 1:
+            local_images = local_images.repeat(1, 3, 1, 1)
+        original_size = local_images.shape[-2:]  # (H, W)
+
+        variations = var_func(local_images*2-1)
+
+        variations = F.interpolate(variations, size=original_size)
+        total_processed += batch_size
+
+        for i in range(len(variations)):
+            save_image(variations[i], os.path.join(rank_save_dir_variation, f'{count}.png'))
+            save_image(local_images[i], os.path.join(rank_save_dir_original, f'{count}.png'))
+            count += 1
+        
+        if rank == 0:
+            pbar.update(batch_size)
+
+        if total_processed >= max_images:
+            break
+
 class DPMetric(object):
 
     def __init__(self, sensitive_dataset, public_model, epsilon):
@@ -112,9 +178,13 @@ class DPMetric(object):
         if world_size < 2:
             raise ValueError("Need at least 2 GPUs for multi-GPU generation.")
         args.world_size = world_size
-        args.model_id = self.public_model.model_id
-
-        spawn(image_variation_batch, args=(dataloader, args), nprocs=world_size, join=True)
+        if hasattr(self.public_model, 'model_id'):
+            args.model_id = self.public_model.model_id
+            spawn(image_variation_batch, args=(dataloader, args), nprocs=world_size, join=True)
+        else:
+            args.bench_config = self.public_model.bench_config
+            args.ckpt_path = self.public_model.ckpt_path
+            spawn(image_variation_batch_ldm, args=(dataloader, args), nprocs=world_size, join=True)
 
         original_dataset = ImageFolder(args.original_save_dir, transform=transforms.ToTensor())
         variation_dataset = ImageFolder(args.variation_save_dir, transform=transforms.ToTensor())
