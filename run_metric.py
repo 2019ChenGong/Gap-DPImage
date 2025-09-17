@@ -24,8 +24,6 @@ def main(args):
 
     results = metrics.cal_metric(args)
 
-    print(results)
-
     return
 
 

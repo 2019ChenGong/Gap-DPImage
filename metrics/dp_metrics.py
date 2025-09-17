@@ -130,7 +130,7 @@ def image_variation_batch_ldm(rank, dataloader, args):
             local_images = local_images.repeat(1, 3, 1, 1)
         original_size = local_images.shape[-2:]  # (H, W)
 
-        variations = var_func(local_images*2-1)
+        variations = var_func(F.interpolate(local_images, size=[size, size])*2-1)
 
         variations = F.interpolate(variations, size=original_size)
         total_processed += batch_size
@@ -159,7 +159,7 @@ class DPMetric(object):
         self.max_images = 20000
         self.variation_degree = 0.1
         self.is_delete_variations = True
-        self.dataloader_size = 32
+        self.dataloader_size = 16
 
     def _image_variation(self, dataloader, save_dir, size=512, max_images=100):
 

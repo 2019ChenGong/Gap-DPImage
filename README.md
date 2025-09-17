@@ -10,8 +10,8 @@ Part of code is borrowed from [DPImageBench](https://github.com/2019ChenGong/DPI
 
 ## Todo list
 
-- public model ++
+- public model + 2
 
 - resize to 256
 
-- ldm
+- dpfid issue

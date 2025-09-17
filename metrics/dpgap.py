@@ -1,5 +1,5 @@
 from metrics.dp_metrics import DPMetric
-
+import torch.nn.functional as F
 import torch
 import torch.nn as nn
 import numpy as np
@@ -64,6 +64,10 @@ class DPGAP(DPMetric):
                     param.requires_grad = False
 
             def forward(self, input1, input2):
+                if input1.shape[-1] == 28:
+                    input1 = F.interpolate(input1, size=[32, 32])
+                if input2.shape[-1] == 28:
+                    input2 = F.interpolate(input2, size=[32, 32])
                 feat1 = self.conv_block(input1).view(input1.size(0), -1)
                 feat2 = self.conv_block(input2).view(input2.size(0), -1)
                 output1 = self.fc(feat1)
@@ -72,7 +76,7 @@ class DPGAP(DPMetric):
                 return output1, output2
 
         # Instantiate and return the network
-        return FixedRandomNet(self.dataloader_size, self.image_height, self.image_width, self.vec_size)
+        return FixedRandomNet(self.dataloader_size, 32 if self.image_height == 28 else self.image_height, 32 if self.image_width == 28 else self.image_width, self.vec_size)
 
     def svd_decomposition(self, variant_output, original_output, n_dim=None):
         if n_dim is None:
@@ -90,9 +94,21 @@ class DPGAP(DPMetric):
         reduced_variants = U1[:, :n_dim] @ torch.diag(S1[:n_dim])  # Shape: (N, n_dim)
         reduced_originals = U2[:, :n_dim] @ torch.diag(S2[:n_dim])  # Shape: (N, n_dim)
 
+        self.print_stats("reduced_variants Output", reduced_variants)
+        self.print_stats("reduced_originals Output", reduced_originals)
+
         distance = torch.norm(reduced_variants - reduced_originals, p='fro')
 
         return distance
+
+    def print_stats(self, name, tensor):
+            print(f"\n📈 {name} Statistics:")
+            print(f"  Mean: {tensor.mean().item():.6f}")
+            print(f"  Std:  {tensor.std().item():.6f}")
+            print(f"  Min:  {tensor.min().item():.6f}")
+            print(f"  Max:  {tensor.max().item():.6f}")
+            print(f"  Median: {tensor.median().item():.6f}")
+            print(f"  Non-zero count: {(tensor != 0).sum().item()} / {tensor.numel()}")
 
     def cal_metric(self, args):
 
@@ -115,6 +131,7 @@ class DPGAP(DPMetric):
             for (var_batch, _), (orig_batch, _) in zip(variations_dataloader, original_dataloader):
                 var_batch = var_batch.to(self.device)
                 orig_batch = orig_batch.to(self.device)
+                print(var_batch.shape, orig_batch.shape)
                 var_out, orig_out = random_model(var_batch, orig_batch)
                 variant_outputs.append(var_out)
                 original_outputs.append(orig_out)
