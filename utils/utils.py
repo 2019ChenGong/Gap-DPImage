@@ -133,9 +133,9 @@ def parse_config(opt, unknown):
         return config
     config.model.private_num_classes = config.sensitive_data.n_classes
     config.model.public_num_classes = config.public_data.n_classes
-    if config.public_data.name is None or opt.method in ['PrivImage', 'DP-FETA', 'DP-FETA-Pro', 'DPDM']:
+    if config.public_data.name is None or opt.method in ['PrivImage', 'DP-FETA', 'DP-FETA-Pro', 'DPDM', 'PE-SGD']:
         config.model.public_num_classes = config.model.private_num_classes
-    if opt.method == 'DP-FETA-Pro':
+    if opt.method == 'DP-FETA-Pro' or opt.method == 'PE-SGD':
         config.train.freq.log_dir = config.setup.workdir + "/train_freq"
         config.gen.freq.log_dir = config.setup.workdir + "/gen_freq"
         config.gen.freq.n_classes = config.sensitive_data.n_classes

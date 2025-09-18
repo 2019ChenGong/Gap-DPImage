@@ -29,6 +29,7 @@ from data.dataset_loader import CentralDataset
 from models.PE.pe.feature_extractor import extract_features
 from models.PE.pe.metrics import make_fid_stats
 from models.PE.pe.metrics import compute_fid
+from models.PE.pe.dp_counter import dp_nn_histogram
 
 
 import importlib
@@ -541,13 +542,61 @@ class PE_Diffusion(DPSynther):
         
         return config
 
-    def pe_vote(self, time_frequency_dataloader, synthetic_data, config):
-        pass
+    def pe_vote(self, images_to_selected, labels_to_selected, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1):
+        count = []
+        features_to_selected = []
+
+
+
+        for class_i in range(self.private_num_classes):
+            sub_count, sub_clean_count = dp_nn_histogram(
+                public_features=features_to_selected[labels_to_selected == class_i],
+                private_features=sensitive_features[sensitive_labels == class_i],
+                noise_multiplier=sigma,
+                num_nearest_neighbor=num_nearest_neighbor,
+                mode=nn_mode,
+                threshold=count_threshold
+            )
+            count.append(sub_count)
+        count = np.concatenate(count)
+
+        top_indices = []
+        bottom_indices = []
+        for class_i in range(self.private_num_classes):
+            class_mask = (labels_to_selected == class_i)
+
+            class_indices = np.where(class_mask)[0]
+            
+            if len(class_indices) == 0:
+                continue
+            
+            class_scores = count[class_mask]  # 注意：这里用 class_mask 直接索引 count
+            sorted_idx_within_class = np.argsort(class_scores)[::-1]  # 降序排列的局部索引
+            n_select = max(1, int(selection_ratio * len(class_indices)))
+            
+            # 取前 n_select 个样本的局部索引，映射回全局索引
+            top_indices_within_class = sorted_idx_within_class[:n_select]
+            selected_global_indices = class_indices[top_indices_within_class]
+            top_indices.append(selected_global_indices)
+
+            bottom_indices_within_class = sorted_idx_within_class[-n_select:]
+            selected_bad_indices = class_indices[bottom_indices_within_class]
+            bottom_indices.append(selected_bad_indices)
+
+        top_indices = np.concatenate(top_indices)
+        top_images = images_to_selected[top_indices]
+        top_labels = labels_to_selected[top_indices]
+
+        bottom_indices = np.concatenate(bottom_indices)
+        bottom_images = images_to_selected[bottom_indices]
+        bottom_labels = labels_to_selected[bottom_indices]
+
+        return top_images, top_labels, bottom_images, bottom_labels
 
     def constractive_learning(self, top_data, poor_data, config):
         pass
     
-    def train(self, sensitive_dataloader, config):
+    def pe_train(self, sensitive_dataloader, config):
         pass
 
 
@@ -659,8 +708,8 @@ class PE_Diffusion(DPSynther):
             raise NotImplementedError("Loss function not supported")
 
         # Initialize the Inception model for feature extraction.
-        inception_model = InceptionFeatureExtractor()
-        inception_model.model = inception_model.model.to(self.device)
+        self.inception_model = InceptionFeatureExtractor()
+        self.inception_model.model = self.inception_model.model.to(self.device)
 
         # Define the sampler function for generating images.
         def sampler(x, y=None):
@@ -710,7 +759,7 @@ class PE_Diffusion(DPSynther):
                         with torch.no_grad():
                             ema.store(model.parameters())
                             ema.copy_to(model.parameters())
-                            fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                            fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, self.inception_model, self.fid_stats, self.device, self.private_num_classes)
                             ema.restore(model.parameters())
 
                             if self.global_rank == 0:
