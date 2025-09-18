@@ -546,9 +546,12 @@ class PE_Diffusion(DPSynther):
 
     def constractive_learning(self, top_data, poor_data, config):
         pass
+    
+    def train(self, sensitive_dataloader, config):
+        pass
 
 
-    def train_plus_pe(self, sensitive_dataloader, config):
+    def train(self, sensitive_dataloader, config):
         """
         Trains the model using the provided sensitive data loader and configuration.
 
