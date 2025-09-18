@@ -42,6 +42,9 @@ def load_model(config, sess=None):
     elif config.setup.method == 'dpsgd-gan':
         from models.dpsgd_gan import DPGAN
         model = DPGAN(config.model, config.setup.local_rank)
+    elif config.setup.method == 'dp-pe':
+        from model.dpsgd_pe_diffusion import PE_Diffusion
+        model = PE_Diffusion(config.model, config.setup.local_rank)
     else:
         raise NotImplementedError('{} is not yet implemented.'.format(config.setup.method))
 

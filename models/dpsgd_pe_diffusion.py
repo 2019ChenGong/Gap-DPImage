@@ -40,7 +40,7 @@ from opacus.distributed import DifferentiallyPrivateDistributedDataParallel as D
 
 from models.synthesizer import DPSynther
 
-class DP_Diffusion(DPSynther):
+class PE_Diffusion(DPSynther):
     def __init__(self, config, device, all_config):
         """
         Initializes the model with the provided configuration and device settings.
@@ -503,23 +503,6 @@ class DP_Diffusion(DPSynther):
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
             self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
-        elif self.all_config.pretrain.mode == 'no_auxiliary':
-            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_time'
-            self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_time
-            self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_time
-            self.pretrain(time_dataloader, self.all_config.pretrain, run=True)
-            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir[:-5] + '_freq'
-            self.all_config.pretrain.n_epochs = self.all_config.train.freq.epochs
-            self.all_config.pretrain.batch_size = self.all_config.train.freq.batch_size
-            self.pretrain_freq(sensitive_train_loader, self.all_config.pretrain)
-        elif self.all_config.pretrain.mode == 'dm_auxiliary':
-            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_time'
-            self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_time
-            self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_time
-            self.pretrain(time_dataloader, self.all_config.pretrain, run=True)
-            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir[:-13] + 'gen_freq'
-            self.all_config.pretrain.n_epochs = self.all_config.train.freq.epochs
-            self.all_config.pretrain.batch_size = self.all_config.train.freq.batch_size
             
             from models.model_loader import load_model
             model_sur, config_sur = load_model(self.all_config)
@@ -558,7 +541,14 @@ class DP_Diffusion(DPSynther):
         
         return config
 
-    def train(self, sensitive_dataloader, config):
+    def pe_vote(self, time_frequency_dataloader, synthetic_data, config):
+        pass
+
+    def constractive_learning(self, top_data, poor_data, config):
+        pass
+
+
+    def train_plus_pe(self, sensitive_dataloader, config):
         """
         Trains the model using the provided sensitive data loader and configuration.
 
