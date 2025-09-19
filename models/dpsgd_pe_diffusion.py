@@ -19,6 +19,7 @@ from models.DP_Diffusion.score_losses import EDMLoss, VPSDELoss, VESDELoss, VLos
 from models.DP_Diffusion.denoiser import EDMDenoiser, VPSDEDenoiser, VESDEDenoiser, VDenoiser
 from models.DP_Diffusion.samplers import ddim_sampler, edm_sampler
 from models.DP_Diffusion.generate_base import generate_batch, generate_batch_grad
+
 from models.dp_merf import DP_MERF as Freq_Model
 from torch.utils.data import random_split, TensorDataset, Dataset, DataLoader, ConcatDataset
 
@@ -462,8 +463,10 @@ class PE_Diffusion(DPSynther):
         torch.cuda.empty_cache()
         
     def warm_up(self, sensitive_train_loader, config):
+
         time_set = CentralDataset(sensitive_train_loader.dataset, num_classes=self.all_config.sensitive_data.n_classes, **self.all_config.public_data.central)
         time_dataloader = torch.utils.data.DataLoader(dataset=time_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size_time, num_workers=0)
+
         if time_set.privacy_history[0] != 0:
             config.dp['privacy_history'] = [time_set.privacy_history]
         if self.global_rank == 0:
@@ -474,11 +477,12 @@ class PE_Diffusion(DPSynther):
                 self.freq_model.train(sensitive_train_loader, self.all_config.train.freq)
                 syn_data, syn_labels = self.freq_model.generate(self.all_config.gen.freq)
             dist.barrier()
-            # return config
+
             syn = np.load(os.path.join(self.all_config.gen.freq.log_dir, 'gen.npz'))
             syn_data, syn_labels = syn["x"], syn["y"]
             freq_train_set = TensorDataset(torch.from_numpy(syn_data).float(), torch.from_numpy(syn_labels).long())
             freq_train_loader = DataLoader(dataset=freq_train_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size_freq, num_workers=16)
+
         if self.all_config.pretrain.mode != 'time':
             config.dp['privacy_history'].append([self.all_config.train.freq.dp.sigma, 1, 1])
 
@@ -536,6 +540,8 @@ class PE_Diffusion(DPSynther):
         else:
             raise NotImplementedError
         
+        self.freq_train_loader = freq_train_loader
+        self.time_dataloader = time_dataloader
         return config
 
     def pe_vote(self, images_to_selected, labels_to_selected, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1):
@@ -603,9 +609,6 @@ class PE_Diffusion(DPSynther):
 
     def constractive_learning(self, top_data, poor_data, config):
         pass
-    
-    def pe_train(self, sensitive_dataloader, config):
-        pass
 
 
     def train(self, sensitive_dataloader, config):
@@ -621,7 +624,6 @@ class PE_Diffusion(DPSynther):
         """
         
         if sensitive_dataloader is None or config.n_epochs == 0:
-            # If the dataloader is not provided or the number of epochs is zero, exit early.
             return
 
         if 'mode' in self.all_config.pretrain and False:
@@ -719,6 +721,38 @@ class PE_Diffusion(DPSynther):
         self.inception_model = InceptionFeatureExtractor()
         self.inception_model.model = self.inception_model.model.to(self.device)
 
+        freq_images = []
+        freq_labels = []
+        freq_features = []
+        time_images = []
+        time_labels = []
+        time_features = []
+        for x, y in self.freq_train_loader:
+            freq_images.append(x)
+            freq_labels.append(y)
+            # features_batch = self.inception_model.get_feature_batch(x)
+            # freq_features.append(features_batch)
+        for x, y in self.time_dataloader:
+            time_images.append(x)
+            time_labels.append(y)
+            # features_batch = self.inception_model.get_feature_batch(x)
+            # time_features.append(features_batch)
+        freq_images = torch.cat(freq_images)[:500]
+        freq_labels = torch.cat(freq_labels)[:500]
+        time_images = torch.cat(time_images)
+        time_labels = torch.cat(time_labels)
+        # freq_features = torch.cat(freq_features)
+        # time_features = torch.cat(time_features)
+
+        sensitive_features = []
+        sensitive_labels = []
+        for x, y in sensitive_dataloader:
+            features_batch = self.inception_model.get_feature_batch(x.to(self.device))
+            sensitive_features.append(features_batch.detach().cpu())
+            sensitive_labels.append(y)
+        sensitive_features = torch.cat(sensitive_features)
+        sensitive_labels = torch.cat(sensitive_labels)
+
         # Define the sampler function for generating images.
         def sampler(x, y=None):
             if self.sampler.type == 'ddim':
@@ -784,8 +818,22 @@ class PE_Diffusion(DPSynther):
                             'Saving checkpoint at iteration %d' % state['step'])
                     dist.barrier()
 
+                    # PE training
+                    logging.info("PE training start!")
+
                     gen_x, gen_y = generate_batch(sampler, (train_x.shape[0], self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
-                    top_x, top_y, bottem_x, bottem_y = self.pe_vote(gen_x, gen_y.detach().cpu().numpy(), torch.randn((gen_x.shape[0], 2048)).detach().cpu().numpy(), gen_y.detach().cpu().numpy(), self.all_config)
+
+                    # load mean and frequency images
+
+                    # combine
+                    images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
+                    label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
+
+                    top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), sensitive_features.numpy(), sensitive_labels.numpy(), self.all_config, self.device)
+
+                    # constractiving learning
+
+                    logging.info("PE training end!")
 
                     if len(train_y.shape) == 2:
                         # Preprocess the input data.
@@ -822,7 +870,6 @@ class PE_Diffusion(DPSynther):
             logging.info('Saving final checkpoint.')
         dist.barrier()
 
-        # Update the EMA.
         self.ema = ema
 
 
@@ -910,5 +957,4 @@ class PE_Diffusion(DPSynther):
             # Return the synthetic data and labels
             return syn_data, syn_labels
         else:
-            # Return None for non-main processes
             return None, None
