@@ -51,10 +51,6 @@ class PE_Diffusion(DPSynther):
             device (str): Device to use for computation (e.g., 'cuda:0').
         """
         super().__init__()
-        # self.local_rank = config.local_rank  # Local rank of the process
-        # self.global_rank = config.global_rank  # Global rank of the process
-        # self.all_config = all_config
-        # self.device = 'cuda:%d' % self.local_rank  # Set the device based on local rank
 
         self.local_rank = config.local_rank  # Local rank of the process
         self.global_rank = config.global_rank  # Global rank of the process
@@ -545,7 +541,20 @@ class PE_Diffusion(DPSynther):
     def pe_vote(self, images_to_selected, labels_to_selected, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1):
         count = []
         features_to_selected = []
+        batch_size = 100
 
+        dataset = TensorDataset(images_to_selected)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        for batch in dataloader:
+            images_batch = batch[0]
+            with torch.no_grad():
+                features_batch = self.inception_model.get_feature_batch(images_batch)
+                features_batch = features_batch.detach().cpu().numpy() 
+                features_to_selected.append(features_batch)
+
+        features_to_selected = np.concatenate(features_to_selected, axis=0)
+        print(features_to_selected.shape)
 
 
         for class_i in range(self.private_num_classes):
@@ -570,11 +579,10 @@ class PE_Diffusion(DPSynther):
             if len(class_indices) == 0:
                 continue
             
-            class_scores = count[class_mask]  # 注意：这里用 class_mask 直接索引 count
-            sorted_idx_within_class = np.argsort(class_scores)[::-1]  # 降序排列的局部索引
+            class_scores = count[class_mask]  
+            sorted_idx_within_class = np.argsort(class_scores)[::-1]  
             n_select = max(1, int(selection_ratio * len(class_indices)))
             
-            # 取前 n_select 个样本的局部索引，映射回全局索引
             top_indices_within_class = sorted_idx_within_class[:n_select]
             selected_global_indices = class_indices[top_indices_within_class]
             top_indices.append(selected_global_indices)
@@ -616,7 +624,7 @@ class PE_Diffusion(DPSynther):
             # If the dataloader is not provided or the number of epochs is zero, exit early.
             return
 
-        if 'mode' in self.all_config.pretrain:
+        if 'mode' in self.all_config.pretrain and False:
             config = self.warm_up(sensitive_dataloader, config)
         
         set_seeds(self.global_rank, config.seed)
@@ -775,6 +783,9 @@ class PE_Diffusion(DPSynther):
                         logging.info(
                             'Saving checkpoint at iteration %d' % state['step'])
                     dist.barrier()
+
+                    gen_x, gen_y = generate_batch(sampler, (train_x.shape[0], self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
+                    top_x, top_y, bottem_x, bottem_y = self.pe_vote(gen_x, gen_y.detach().cpu().numpy(), torch.randn((gen_x.shape[0], 2048)).detach().cpu().numpy(), gen_y.detach().cpu().numpy(), self.all_config)
 
                     if len(train_y.shape) == 2:
                         # Preprocess the input data.
