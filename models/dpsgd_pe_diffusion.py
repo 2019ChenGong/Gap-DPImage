@@ -823,13 +823,11 @@ class PE_Diffusion(DPSynther):
 
                     gen_x, gen_y = generate_batch(sampler, (train_x.shape[0], self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
 
-                    # load mean and frequency images
-
                     # combine
                     images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
                     label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
-
                     top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), sensitive_features.numpy(), sensitive_labels.numpy(), self.all_config, self.device)
+                    logging.info("PE Selecting end!")
 
                     # constractiving learning
 
@@ -874,10 +872,9 @@ class PE_Diffusion(DPSynther):
 
 
     def generate(self, config, sampler_config=None):
-        # Log the start of the generation process with the number of samples to be generated
+
         logging.info("start to generate {} samples".format(config.data_num))
         
-        # Ensure the log directory exists if this is the main process (global_rank == 0)
         if self.global_rank == 0 and not os.path.exists(config.log_dir):
             make_dir(config.log_dir)
         
@@ -942,16 +939,13 @@ class PE_Diffusion(DPSynther):
             syn_data = np.concatenate(syn_data)
             syn_labels = np.concatenate(syn_labels)
             
-            # Save the synthetic data and labels to a .npz file
             np.savez(os.path.join(config.log_dir, "gen.npz"), x=syn_data, y=syn_labels)
             
-            # Prepare images to display
             show_images = []
             for cls in range(self.private_num_classes):
                 show_images.append(syn_data[syn_labels==cls][:8])
             show_images = np.concatenate(show_images)
             
-            # Save the sample images to a PNG file
             torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(config.log_dir, 'sample.png'), padding=1, nrow=8)
             
             # Return the synthetic data and labels
