@@ -819,6 +819,11 @@ class PE_Diffusion(DPSynther):
                     dist.barrier()
 
                     # PE training
+                    """
+                    Key hyper-parameter:
+                    1. voting epoch interval; 2. voting privacy budget; 3. synthetic image size; 
+                    4. mean and frequency image size; 5. top and bottom image size;
+                    """
                     logging.info("PE training start!")
 
                     gen_x, gen_y = generate_batch(sampler, (train_x.shape[0], self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)

@@ -14,3 +14,5 @@ python run_metric.py -m DPGAP -pm stable-diffusion-2-1-base -sd cifar10
 python run_metric.py -m DPGAP -pm dpimagebench-ldm -sd celeba
 
 # ln -s /bigtemp/fzv6en/gap_data/exp exp
+
+python run.py setup.n_gpus_per_node=3 --method PE-SGD --data_name mnist_28 --epsilon 10.0 eval.mode=val pretrain.mode=time_freq
