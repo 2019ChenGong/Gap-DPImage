@@ -27,9 +27,9 @@ from models.DP_Diffusion.rnd import Rnd
 from models.DP_MERF.rff_mmd_approx import data_label_embedding, get_rff_mmd_loss, noisy_dataset_embedding
 from data.dataset_loader import CentralDataset
 
-from models.PE.pe.feature_extractor import extract_features
-from models.PE.pe.metrics import make_fid_stats
-from models.PE.pe.metrics import compute_fid
+# from models.PE.pe.feature_extractor import extract_features
+# from models.PE.pe.metrics import make_fid_stats
+# from models.PE.pe.metrics import compute_fid
 from models.PE.pe.dp_counter import dp_nn_histogram
 
 
@@ -486,6 +486,10 @@ class PE_Diffusion(DPSynther):
         if self.all_config.pretrain.mode != 'time':
             config.dp['privacy_history'].append([self.all_config.train.freq.dp.sigma, 1, 1])
 
+        # self.freq_train_loader = freq_train_loader
+        # self.time_dataloader = time_dataloader
+        # return config
+    
         if self.all_config.pretrain.mode == 'freq_time':
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_freq'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
@@ -505,23 +509,23 @@ class PE_Diffusion(DPSynther):
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
             self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
             
-            from models.model_loader import load_model
-            model_sur, config_sur = load_model(self.all_config)
-            config_sur.gen.log_dir = self.all_config.pretrain.log_dir + "/gen"
-            model_sur.pretrain_freq(sensitive_train_loader, self.all_config.pretrain)
-            syn_data, syn_labels = model_sur.generate(config_sur.gen, config_sur.model.sampler)
-            del model_sur
-            dist.barrier()
+            # from models.model_loader import load_model
+            # model_sur, config_sur = load_model(self.all_config)
+            # config_sur.gen.log_dir = self.all_config.pretrain.log_dir + "/gen"
+            # model_sur.pretrain_freq(sensitive_train_loader, self.all_config.pretrain)
+            # syn_data, syn_labels = model_sur.generate(config_sur.gen, config_sur.model.sampler)
+            # del model_sur
+            # dist.barrier()
 
-            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir[:-8] + 'pretrain_freq'
-            self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
-            self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
+            # self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir[:-8] + 'pretrain_freq'
+            # self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
+            # self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
 
-            syn = np.load(os.path.join(config_sur.gen.log_dir, 'gen.npz'))
-            syn_data, syn_labels = syn["x"], syn["y"]
-            freq_train_set = TensorDataset(torch.from_numpy(syn_data).float(), torch.from_numpy(syn_labels).long())
-            freq_train_loader = torch.utils.data.DataLoader(dataset=freq_train_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size, num_workers=16)
-            self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
+            # syn = np.load(os.path.join(config_sur.gen.log_dir, 'gen.npz'))
+            # syn_data, syn_labels = syn["x"], syn["y"]
+            # freq_train_set = TensorDataset(torch.from_numpy(syn_data).float(), torch.from_numpy(syn_labels).long())
+            # freq_train_loader = torch.utils.data.DataLoader(dataset=freq_train_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size, num_workers=16)
+            # self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
         elif self.all_config.pretrain.mode == 'freq':
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_freq'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
@@ -544,7 +548,7 @@ class PE_Diffusion(DPSynther):
         self.time_dataloader = time_dataloader
         return config
 
-    def pe_vote(self, images_to_selected, labels_to_selected, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1):
+    def pe_vote(self, images_to_selected, labels_to_selected, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None):
         count = []
         features_to_selected = []
         batch_size = 100
@@ -555,13 +559,13 @@ class PE_Diffusion(DPSynther):
         for batch in dataloader:
             images_batch = batch[0]
             with torch.no_grad():
-                features_batch = self.inception_model.get_feature_batch(images_batch)
+                if images_batch.shape[1] == 1:
+                    images_batch = images_batch.repeat(1, 3, 1, 1)
+                features_batch = self.inception_model.get_feature_batch(images_batch.to(device))
                 features_batch = features_batch.detach().cpu().numpy() 
                 features_to_selected.append(features_batch)
 
         features_to_selected = np.concatenate(features_to_selected, axis=0)
-        print(features_to_selected.shape)
-
 
         for class_i in range(self.private_num_classes):
             sub_count, sub_clean_count = dp_nn_histogram(
@@ -607,8 +611,13 @@ class PE_Diffusion(DPSynther):
 
         return top_images, top_labels, bottom_images, bottom_labels
 
-    def constractive_learning(self, top_data, poor_data, config):
-        pass
+    def constractive_learning(self, top_x, top_y, bottem_x, bottem_y, epoch, config):
+        contrastive_dataset = TensorDataset(torch.tensor(top_x).float(), torch.tensor(top_y).long())
+        contrastive_dataloader = DataLoader(contrastive_dataset)
+        self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
+        self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
+        self.all_config.pretrain.batch_size = config.contrastive_batch_size
+        self.pretrain(contrastive_dataloader, self.all_config.pretrain)
 
 
     def train(self, sensitive_dataloader, config):
@@ -626,7 +635,7 @@ class PE_Diffusion(DPSynther):
         if sensitive_dataloader is None or config.n_epochs == 0:
             return
 
-        if 'mode' in self.all_config.pretrain and False:
+        if 'mode' in self.all_config.pretrain:
             config = self.warm_up(sensitive_dataloader, config)
         
         set_seeds(self.global_rank, config.seed)
@@ -721,6 +730,7 @@ class PE_Diffusion(DPSynther):
         self.inception_model = InceptionFeatureExtractor()
         self.inception_model.model = self.inception_model.model.to(self.device)
 
+        pe_freq = config.pe_freq
         freq_images = []
         freq_labels = []
         freq_features = []
@@ -746,7 +756,10 @@ class PE_Diffusion(DPSynther):
 
         sensitive_features = []
         sensitive_labels = []
-        for x, y in sensitive_dataloader:
+        sensitive_dataloader_inc = DataLoader(sensitive_dataloader.dataset, batch_size=100)
+        for x, y in sensitive_dataloader_inc:
+            if x.shape[1] == 1:
+                x = x.repeat(1, 3, 1, 1)
             features_batch = self.inception_model.get_feature_batch(x.to(self.device))
             sensitive_features.append(features_batch.detach().cpu())
             sensitive_labels.append(y)
@@ -770,13 +783,14 @@ class PE_Diffusion(DPSynther):
 
         # Start the training loop.
         for epoch in range(config.n_epochs):
+            pe_lock = True
             with BatchMemoryManager(
                     data_loader=dataset_loader,
                     max_physical_batch_size=config.dp.max_physical_batch_size,
                     optimizer=optimizer,
                     n_splits=config.n_splits if config.n_splits > 0 else None) as memory_safe_data_loader:
 
-                for _, (train_x, train_y) in enumerate(memory_safe_data_loader):
+                for local_step, (train_x, train_y) in enumerate(memory_safe_data_loader):
                     if state['step'] % config.snapshot_freq == 0 and state['step'] >= config.snapshot_threshold and self.global_rank == 0:
                         # Save a snapshot checkpoint and sample a batch of images.
                         logging.info(
@@ -817,26 +831,28 @@ class PE_Diffusion(DPSynther):
                         logging.info(
                             'Saving checkpoint at iteration %d' % state['step'])
                     dist.barrier()
+                    
+                    if (epoch + 1) % pe_freq == 0 and not optimizer._is_last_step_skipped and pe_lock:
+                        # PE training
+                        """
+                        Key hyper-parameter:
+                        1. voting epoch interval; 2. voting privacy budget; 3. synthetic image size; 
+                        4. mean and frequency image size; 5. top and bottom image size;
+                        """
+                        logging.info("PE training start!")
 
-                    # PE training
-                    """
-                    Key hyper-parameter:
-                    1. voting epoch interval; 2. voting privacy budget; 3. synthetic image size; 
-                    4. mean and frequency image size; 5. top and bottom image size;
-                    """
-                    logging.info("PE training start!")
+                        gen_x, gen_y = generate_batch(sampler, (1000, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
 
-                    gen_x, gen_y = generate_batch(sampler, (train_x.shape[0], self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
+                        # combine
+                        images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
+                        label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
+                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), sensitive_features.numpy(), sensitive_labels.numpy(), config=self.all_config, device=self.device)
+                        logging.info("PE Selecting end!")
 
-                    # combine
-                    images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
-                    label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
-                    top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), sensitive_features.numpy(), sensitive_labels.numpy(), self.all_config, self.device)
-                    logging.info("PE Selecting end!")
-
-                    # constractiving learning
-
-                    logging.info("PE training end!")
+                        # constractiving learning
+                        self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config)
+                        logging.info("PE training end!")
+                        pe_lock = False
 
                     if len(train_y.shape) == 2:
                         # Preprocess the input data.
