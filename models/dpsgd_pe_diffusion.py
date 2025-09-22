@@ -123,7 +123,7 @@ class PE_Diffusion(DPSynther):
 
         self.is_pretrain = True  # Flag to indicate pretraining status
 
-    def pretrain(self, public_dataloader, config, run=False):
+    def pretrain(self, public_dataloader, config):
         """
         Pre-trains the model using the provided public dataloader and configuration.
 
@@ -230,7 +230,13 @@ class PE_Diffusion(DPSynther):
         # Training loop over the specified number of epochs.
         for epoch in range(config.n_epochs):
             dataset_loader.sampler.set_epoch(epoch)
-            for _, (train_x, train_y) in enumerate(dataset_loader):
+            for _, batch in enumerate(dataset_loader):
+
+                if len(batch) == 2:
+                    train_x, train_y = batch
+                    label = None
+                else:
+                    train_x, train_y, label = batch
 
                 # Save snapshots and checkpoints at specified intervals.
                 if state['step'] % config.snapshot_freq == 0 and state['step'] >= config.snapshot_threshold and self.global_rank == 0:
@@ -273,7 +279,11 @@ class PE_Diffusion(DPSynther):
                 # Prepare the input data for training.
                 train_x, train_y = train_x.to(self.device) * 2. - 1., train_y.to(self.device)
                 optimizer.zero_grad(set_to_none=True)
-                loss = torch.mean(loss_fn(model, train_x, train_y))
+                loss = loss_fn(model, train_x, train_y)
+                if label is not None:
+                    loss = - torch.nn.functional.logsigmoid(-loss * (2 * label.to(self.device) - 1)).mean()
+                else:
+                    loss = loss.mean()
                 loss.backward()
                 optimizer.step()
 
@@ -301,7 +311,7 @@ class PE_Diffusion(DPSynther):
         # Clean up the model and free GPU memory.
         del model
         torch.cuda.empty_cache()
-    
+
     def pretrain_freq(self, sensitive_dataloader, config):
         """
         Pre-trains the model using the provided public dataloader and configuration.
@@ -494,20 +504,20 @@ class PE_Diffusion(DPSynther):
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_freq'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
-            self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
+            self.pretrain(freq_train_loader, self.all_config.pretrain)
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir[:-5] + '_time'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_time
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_time
-            self.pretrain(time_dataloader, self.all_config.pretrain, run=True)
+            self.pretrain(time_dataloader, self.all_config.pretrain)
         elif self.all_config.pretrain.mode == 'time_freq':
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_time'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_time
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_time
-            self.pretrain(time_dataloader, self.all_config.pretrain, run=True)
+            self.pretrain(time_dataloader, self.all_config.pretrain)
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir[:-5] + '_freq'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
-            self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
+            self.pretrain(freq_train_loader, self.all_config.pretrain)
             
             # from models.model_loader import load_model
             # model_sur, config_sur = load_model(self.all_config)
@@ -525,22 +535,22 @@ class PE_Diffusion(DPSynther):
             # syn_data, syn_labels = syn["x"], syn["y"]
             # freq_train_set = TensorDataset(torch.from_numpy(syn_data).float(), torch.from_numpy(syn_labels).long())
             # freq_train_loader = torch.utils.data.DataLoader(dataset=freq_train_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size, num_workers=16)
-            # self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
+            # self.pretrain(freq_train_loader, self.all_config.pretrain)
         elif self.all_config.pretrain.mode == 'freq':
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_freq'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
-            self.pretrain(freq_train_loader, self.all_config.pretrain, run=True)
+            self.pretrain(freq_train_loader, self.all_config.pretrain)
         elif self.all_config.pretrain.mode == 'time':
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_time'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_time
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_time
-            self.pretrain(time_dataloader, self.all_config.pretrain, run=True)
+            self.pretrain(time_dataloader, self.all_config.pretrain)
         elif self.all_config.pretrain.mode == 'mix':
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
             pretrain_set = ConcatDataset([freq_train_set, self.time_dataloader.dataset])
-            self.pretrain(DataLoader(dataset=pretrain_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size, num_workers=16), self.all_config.pretrain, run=True)
+            self.pretrain(DataLoader(dataset=pretrain_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size, num_workers=16), self.all_config.pretrain)
         else:
             raise NotImplementedError
         
@@ -574,7 +584,8 @@ class PE_Diffusion(DPSynther):
                 noise_multiplier=sigma,
                 num_nearest_neighbor=num_nearest_neighbor,
                 mode=nn_mode,
-                threshold=count_threshold
+                threshold=count_threshold,
+                device=self.local_rank,
             )
             count.append(sub_count)
         count = np.concatenate(count)
@@ -611,10 +622,21 @@ class PE_Diffusion(DPSynther):
 
         return top_images, top_labels, bottom_images, bottom_labels
 
-    def constractive_learning(self, top_x, top_y, bottem_x, bottem_y, epoch, config):
-        contrastive_dataset = TensorDataset(torch.tensor(top_x).float(), torch.tensor(top_y).long())
+    def constractive_learning(self, top_x, top_y, bottom_x, bottom_y, epoch, config):
+        if 'contrastive' in config and config['contrastive']:
+            top_labels = np.ones_like(top_y)
+            bottom_labels = np.zeros_like(bottom_y)
+            x = np.concatenate([top_x, bottom_x])
+            y = np.concatenate([top_y, bottom_y])
+            label = np.concatenate([top_labels, bottom_labels])
+            contrastive_dataset = TensorDataset(torch.tensor(x).float(), torch.tensor(y).long(), torch.tensor(label).long())
+        else:
+            contrastive_dataset = TensorDataset(torch.tensor(top_x).float(), torch.tensor(top_y).long())
         contrastive_dataloader = DataLoader(contrastive_dataset)
-        self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
+        if 'contrastive' in self.all_config.pretrain.log_dir:
+            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir.split('contrastive')[0] + '_contrastive_{}'.format(epoch)
+        else:
+            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
         self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
         self.all_config.pretrain.batch_size = config.contrastive_batch_size
         self.pretrain(contrastive_dataloader, self.all_config.pretrain)

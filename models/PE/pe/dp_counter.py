@@ -7,7 +7,7 @@ import torch
 
 def dp_nn_histogram(public_features, private_features, noise_multiplier,
                     num_packing=1, num_nearest_neighbor=1, mode='L2',
-                    threshold=0.0):
+                    threshold=0.0, device='cpu'):
     assert public_features.shape[0] % num_packing == 0
     num_true_public_features = public_features.shape[0] // num_packing
     faiss_res = faiss.StandardGpuResources()
@@ -18,7 +18,7 @@ def dp_nn_histogram(public_features, private_features, noise_multiplier,
     else:
         raise Exception(f'Unknown mode {mode}')
     if torch.cuda.is_available():
-        index = faiss.index_cpu_to_gpu(faiss_res, 0, index)
+        index = faiss.index_cpu_to_gpu(faiss_res, device, index)
 
     index.add(public_features)
     logging.info(f'Number of samples in index: {index.ntotal}')
