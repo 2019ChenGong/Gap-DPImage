@@ -42,6 +42,54 @@ from opacus.distributed import DifferentiallyPrivateDistributedDataParallel as D
 
 from models.synthesizer import DPSynther
 
+
+import torch.nn.functional as F
+
+def compute_loss(features, labels, temperature=0.5):
+    """
+    计算DDPM的去噪损失和对比学习损失（InfoNCE）的总和。
+
+    参数：
+        features (torch.Tensor): DDPM提取的特征，形状 (batch_size, feature_dim)
+        labels (torch.Tensor): 二值标签，1表示好图片，0表示坏图片，形状 (batch_size,)
+        temperature (float): InfoNCE损失的温度参数，控制相似度分布的锐度
+
+    返回：
+        contrastive_loss (torch.Tensor): InfoNCE对比损失
+    """
+    good_mask = labels == 1  # 选择标签为1的样本
+
+    # InfoNCE对比损失
+    batch_size = features.size(0)
+    contrastive_loss = torch.tensor(0.0, device=features.device)
+
+    if good_mask.sum() > 1:  # 确保有足够的好图片用于正样本对
+        # 提取好图片和坏图片的特征
+        good_features = features[good_mask]
+        bad_features = features[~good_mask] if (~good_mask).sum() > 0 else None
+
+        # 计算相似度矩阵（好图片之间的相似度）
+        good_sim = F.cosine_similarity(
+            good_features.unsqueeze(1), good_features.unsqueeze(0), dim=-1
+        ) / temperature
+
+        # 正样本对（好图片之间的对角线元素）
+        labels_good = torch.arange(good_features.size(0), device=features.device)
+        
+        # 负样本：好图片与所有其他图片（包括坏图片）
+        if bad_features is not None:
+            all_sim = F.cosine_similarity(
+                good_features.unsqueeze(1), features.unsqueeze(0), dim=-1
+            ) / temperature
+        else:
+            all_sim = good_sim  # 若无坏图片，仅用好图片
+
+        # InfoNCE损失
+        contrastive_loss = F.cross_entropy(all_sim, labels_good)
+
+
+    return contrastive_loss
+
 class PE_Diffusion(DPSynther):
     def __init__(self, config, device, all_config):
         """
@@ -281,7 +329,13 @@ class PE_Diffusion(DPSynther):
                 optimizer.zero_grad(set_to_none=True)
                 loss = loss_fn(model, train_x, train_y)
                 if label is not None:
-                    loss = - torch.nn.functional.logsigmoid(-loss * (2 * label.to(self.device) - 1)).mean()
+                    label = label.to(self.device)
+                    if self.all_config.train.contrastive == 'v1':
+                        loss = (loss * label.float() + loss * (label.float()-1) * self.all_config.train.contrastive_alpha).mean()
+                    elif self.all_config.train.contrastive == 'v2':
+                        features = model(train_x, torch.ones_like(train_y).float(), train_y, return_feature=True)
+                        contrastive_loss = compute_loss(features.reshape(features.shape[0], -1), label)
+                        loss = (loss * label.float()).mean() + contrastive_loss * self.all_config.train.contrastive_alpha
                 else:
                     loss = loss.mean()
                 loss.backward()
@@ -556,6 +610,7 @@ class PE_Diffusion(DPSynther):
         
         self.freq_train_loader = freq_train_loader
         self.time_dataloader = time_dataloader
+        torch.cuda.empty_cache()
         return config
 
     def pe_vote(self, images_to_selected, labels_to_selected, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None):
@@ -633,8 +688,8 @@ class PE_Diffusion(DPSynther):
         else:
             contrastive_dataset = TensorDataset(torch.tensor(top_x).float(), torch.tensor(top_y).long())
         contrastive_dataloader = DataLoader(contrastive_dataset)
-        if 'contrastive' in self.all_config.pretrain.log_dir:
-            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir.split('contrastive')[0] + '_contrastive_{}'.format(epoch)
+        if 'contrastive' in self.all_config.pretrain.log_dir[-15:]:
+            self.all_config.pretrain.log_dir = '_'.join(self.all_config.pretrain.log_dir.split('_')[:-1]) + 'contrastive_{}'.format(epoch)
         else:
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
         self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
@@ -854,7 +909,7 @@ class PE_Diffusion(DPSynther):
                             'Saving checkpoint at iteration %d' % state['step'])
                     dist.barrier()
                     
-                    if (epoch + 1) % pe_freq == 0 and not optimizer._is_last_step_skipped and pe_lock:
+                    if epoch in pe_freq and not optimizer._is_last_step_skipped and pe_lock:
                         # PE training
                         """
                         Key hyper-parameter:

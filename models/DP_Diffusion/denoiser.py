@@ -14,7 +14,10 @@ class EDMDenoiser(nn.Module):
         self.sigma_data = sigma_data
         self.model = model
 
-    def forward(self, x, sigma, y=None):
+    def forward(self, x, sigma, y=None, return_feature=False):
+        if return_feature:
+            out = self.model(x, sigma, y)
+            return out
         c_skip = self.sigma_data ** 2. / \
             (sigma ** 2. + self.sigma_data ** 2.)
         c_out = sigma * self.sigma_data / \

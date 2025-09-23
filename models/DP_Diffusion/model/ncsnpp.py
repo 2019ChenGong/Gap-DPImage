@@ -251,7 +251,7 @@ class NCSNpp(nn.Module):
 
         self.all_modules = nn.ModuleList(modules)
 
-    def forward(self, x, time_cond, y):
+    def forward(self, x, time_cond, y, return_feature=False):
         # timestep/noise_level embedding; only for continuous training
         modules = self.all_modules
         m_idx = 0
@@ -333,6 +333,9 @@ class NCSNpp(nn.Module):
         m_idx += 1
 
         pyramid = None
+
+        if return_feature:
+            return h
 
         # Upsampling block
         for i_level in reversed(range(self.num_resolutions)):
