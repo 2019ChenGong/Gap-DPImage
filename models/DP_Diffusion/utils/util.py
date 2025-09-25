@@ -133,6 +133,30 @@ def compute_fid(n_samples, n_gpus, sampling_shape, sampler, inception_model, sta
     torch.cuda.empty_cache()
     return fid
 
+def compute_fid_with_images(images, sampling_shape, inception_model, stats_paths, device):
+    def generator():
+        num_sampling_rounds = int(np.ceil(len(images) / sampling_shape[0]))
+        for i in range(num_sampling_rounds):
+            yield images[i*sampling_shape[0]:(i+1)*sampling_shape[0]]
+
+    act = get_activations(generator(), inception_model, device=device, max_samples=None)
+    mu = np.mean(act, axis=0)
+    sigma = np.cov(act, rowvar=False)
+    m = torch.from_numpy(mu).cuda()
+    s = torch.from_numpy(sigma).cuda()
+    average_tensor(m)
+    average_tensor(s)
+
+    all_pool_mean = m.cpu().numpy()
+    all_pool_sigma = s.cpu().numpy()
+
+    stats = np.load(stats_paths)
+    data_pools_mean = stats['mu']
+    data_pools_sigma = stats['sigma']
+    fid = calculate_frechet_distance(data_pools_mean, data_pools_sigma, all_pool_mean, all_pool_sigma)
+    torch.cuda.empty_cache()
+    return fid
+
 
 class FolderDataset(torch.utils.data.Dataset):
     def __init__(self, path, transform=None):

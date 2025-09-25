@@ -12,7 +12,7 @@ import tqdm
 import random
 
 from models.DP_Diffusion.model.ncsnpp import NCSNpp
-from models.DP_Diffusion.utils.util import set_seeds, make_dir, save_checkpoint, sample_random_image_batch, compute_fid
+from models.DP_Diffusion.utils.util import set_seeds, make_dir, save_checkpoint, sample_random_image_batch, compute_fid, compute_fid_with_images
 from fld.features.InceptionFeatureExtractor import InceptionFeatureExtractor
 from models.DP_Diffusion.model.ema import ExponentialMovingAverage
 from models.DP_Diffusion.score_losses import EDMLoss, VPSDELoss, VESDELoss, VLoss
@@ -613,8 +613,7 @@ class PE_Diffusion(DPSynther):
         torch.cuda.empty_cache()
         return config
 
-    def pe_vote(self, images_to_selected, labels_to_selected, image_categories, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None):
-        count = []
+    def pe_vote(self, images_to_selected, labels_to_selected, image_categories, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None, sampler=None):
         features_to_selected = []
         batch_size = 100
 
@@ -632,6 +631,8 @@ class PE_Diffusion(DPSynther):
 
         features_to_selected = np.concatenate(features_to_selected, axis=0)
 
+        top_indices = []
+        bottom_indices = []
         for class_i in range(self.private_num_classes):
             sub_count, sub_clean_count = dp_nn_histogram(
                 public_features=features_to_selected[labels_to_selected == class_i],
@@ -641,22 +642,12 @@ class PE_Diffusion(DPSynther):
                 mode=nn_mode,
                 threshold=count_threshold,
                 device=self.local_rank,
+                verbose=False,
             )
-            count.append(sub_count)
-        count = np.concatenate(count)
 
-        top_indices = []
-        bottom_indices = []
-        for class_i in range(self.private_num_classes):
             class_mask = (labels_to_selected == class_i)
-
             class_indices = np.where(class_mask)[0]
-            
-            if len(class_indices) == 0:
-                continue
-            
-            class_scores = count[class_mask]  
-            sorted_idx_within_class = np.argsort(class_scores)[::-1]  
+            sorted_idx_within_class = np.argsort(sub_count)[::-1]
             n_select = max(1, int(selection_ratio * len(class_indices)))
             
             top_indices_within_class = sorted_idx_within_class[:n_select]
@@ -681,6 +672,10 @@ class PE_Diffusion(DPSynther):
         if self.global_rank == 0 and image_categories is not None:
             logging.info(f"Selected top results:\nFreq: {np.sum(top_categories==0)} / {np.sum(image_categories==0)} Time: {np.sum(top_categories==1)} / {np.sum(image_categories==1)} Gen: {np.sum(top_categories==2)} / {np.sum(image_categories==2)}")
             logging.info(f"Selected bottom results:\nFreq: {np.sum(bottom_categories==0)} / {np.sum(image_categories==0)} Time: {np.sum(bottom_categories==1)} / {np.sum(image_categories==1)} Gen: {np.sum(bottom_categories==2)} / {np.sum(image_categories==2)}")
+
+        # if sampler is not None:
+        #     top_images = self._image_variation(top_images, top_labels, sampler=sampler)
+        #     bottom_images = self._image_variation(bottom_images, bottom_labels, sampler=sampler)
         torch.cuda.empty_cache()
         return top_images, top_labels, bottom_images, bottom_labels
 
@@ -852,9 +847,9 @@ class PE_Diffusion(DPSynther):
         self.sensitive_labels = torch.cat(sensitive_labels)
 
         # Define the sampler function for generating images.
-        def sampler(x, y=None):
+        def sampler(x, y=None, start_sigma=None, start_t=None):
             if self.sampler.type == 'ddim':
-                return ddim_sampler(x, y, model, **self.sampler)
+                return ddim_sampler(x, y, model, start_sigma=start_sigma, start_t=start_t, **self.sampler)
             elif self.sampler.type == 'edm':
                 return edm_sampler(x, y, model, **self.sampler)
             else:
@@ -924,7 +919,8 @@ class PE_Diffusion(DPSynther):
                         1. voting epoch interval; 2. voting privacy budget; 3. synthetic image size; 
                         4. mean and frequency image size; 5. top and bottom image size;
                         """
-                        logging.info("PE training start!")
+                        if self.global_rank == 0:
+                            logging.info("PE training start!")
 
                         gen_x, gen_y = generate_batch(sampler, (config.contrastive_num_samples, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
 
@@ -932,12 +928,18 @@ class PE_Diffusion(DPSynther):
                         images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
                         label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
                         image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
-                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device)
-                        logging.info("PE Selecting end!")
+                        fid_before_selection = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler)
+                        fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                        fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                        if self.global_rank == 0:
+                            logging.info("PE Selecting end!")
+                            logging.info(f"fid_before_selection: {fid_before_selection} fid_top: {fid_top} fid_bottom: {fid_bottom}")
 
                         # constractiving learning
                         self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config)
-                        logging.info("PE training end!")
+                        if self.global_rank == 0:
+                            logging.info("PE training end!")
                         pe_lock = False
 
                     if len(train_y.shape) == 2:
@@ -977,6 +979,41 @@ class PE_Diffusion(DPSynther):
 
         self.ema = ema
 
+    # def image_variation(self, images, labels,
+    #                     num_variations_per_image, size, variation_degree):
+    #     # width, height = list(map(int, size.split('x')))
+    #     # if width != self._image_size or height != self._image_size:
+    #     #     raise ValueError(
+    #     #         f'width and height must be equal to {self._image_size}')
+    #     images = images.astype(np.float32) / 127.5 - 1.0
+    #     images = images.transpose(0, 3, 1, 2)
+    #     variations = []
+    #     for _ in tqdm(range(num_variations_per_image)):
+    #         sub_variations = self._image_variation(
+    #             images=images,
+    #             labels=labels,
+    #             variation_degree=variation_degree)
+    #         variations.append(sub_variations)
+    #     variations = np.stack(variations, axis=1)
+
+    #     # variations = _round_to_uint8((variations + 1.0) * 127.5)
+    #     # variations = variations.transpose(0, 1, 3, 4, 2)
+    #     torch.cuda.empty_cache()
+    #     return variations
+
+    def _image_variation(self, images, labels, variation_degree=0.1, sampler=None, batch_size=100):
+        samples = []
+        images_list = torch.split(images, split_size_or_sections=batch_size)
+        labels_list = torch.split(labels, split_size_or_sections=batch_size)
+        for i in range(len(images_list)):
+            with torch.no_grad():
+                # x = self._sampler(images_list[i].to(dist_util.dev()), labels_list[i].to(dist_util.dev()), start_t=variation_degree/1000)
+                x = sampler(images_list[i].to(self.device), labels_list[i].to(self.device), start_sigma=variation_degree*10)
+            samples.append(x.detach().cpu())
+            # logging.info(f"Created {(i+1)*self._batch_size} samples")
+        samples = torch.cat(samples).clamp(-1., 1.)
+
+        return (samples + 1) / 2
 
     def generate(self, config, sampler_config=None):
 
