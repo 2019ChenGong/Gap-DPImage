@@ -613,7 +613,7 @@ class PE_Diffusion(DPSynther):
         torch.cuda.empty_cache()
         return config
 
-    def pe_vote(self, images_to_selected, labels_to_selected, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None):
+    def pe_vote(self, images_to_selected, labels_to_selected, image_categories, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None):
         count = []
         features_to_selected = []
         batch_size = 100
@@ -670,11 +670,18 @@ class PE_Diffusion(DPSynther):
         top_indices = np.concatenate(top_indices)
         top_images = images_to_selected[top_indices]
         top_labels = labels_to_selected[top_indices]
+        if image_categories is not None:
+            top_categories = image_categories[top_indices]
 
         bottom_indices = np.concatenate(bottom_indices)
         bottom_images = images_to_selected[bottom_indices]
         bottom_labels = labels_to_selected[bottom_indices]
-
+        if image_categories is not None:
+            bottom_categories = image_categories[bottom_indices]
+        if self.global_rank == 0 and image_categories is not None:
+            logging.info(f"Selected top results:\nFreq: {np.sum(top_categories==0)} / {np.sum(image_categories==0)} Time: {np.sum(top_categories==1)} / {np.sum(image_categories==1)} Gen: {np.sum(top_categories==2)} / {np.sum(image_categories==2)}")
+            logging.info(f"Selected bottom results:\nFreq: {np.sum(bottom_categories==0)} / {np.sum(image_categories==0)} Time: {np.sum(bottom_categories==1)} / {np.sum(image_categories==1)} Gen: {np.sum(bottom_categories==2)} / {np.sum(image_categories==2)}")
+        torch.cuda.empty_cache()
         return top_images, top_labels, bottom_images, bottom_labels
 
     def constractive_learning(self, top_x, top_y, bottom_x, bottom_y, epoch, config):
@@ -689,12 +696,13 @@ class PE_Diffusion(DPSynther):
             contrastive_dataset = TensorDataset(torch.tensor(top_x).float(), torch.tensor(top_y).long())
         contrastive_dataloader = DataLoader(contrastive_dataset)
         if 'contrastive' in self.all_config.pretrain.log_dir[-15:]:
-            self.all_config.pretrain.log_dir = '_'.join(self.all_config.pretrain.log_dir.split('_')[:-1]) + 'contrastive_{}'.format(epoch)
+            self.all_config.pretrain.log_dir = '_'.join(self.all_config.pretrain.log_dir.split('_')[:-1]) + '_{}'.format(epoch)
         else:
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
         self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
         self.all_config.pretrain.batch_size = config.contrastive_batch_size
         self.pretrain(contrastive_dataloader, self.all_config.pretrain)
+        torch.cuda.empty_cache()
 
 
     def train(self, sensitive_dataloader, config):
@@ -840,8 +848,8 @@ class PE_Diffusion(DPSynther):
             features_batch = self.inception_model.get_feature_batch(x.to(self.device))
             sensitive_features.append(features_batch.detach().cpu())
             sensitive_labels.append(y)
-        sensitive_features = torch.cat(sensitive_features)
-        sensitive_labels = torch.cat(sensitive_labels)
+        self.sensitive_features = torch.cat(sensitive_features)
+        self.sensitive_labels = torch.cat(sensitive_labels)
 
         # Define the sampler function for generating images.
         def sampler(x, y=None):
@@ -918,12 +926,13 @@ class PE_Diffusion(DPSynther):
                         """
                         logging.info("PE training start!")
 
-                        gen_x, gen_y = generate_batch(sampler, (1000, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
+                        gen_x, gen_y = generate_batch(sampler, (config.contrastive_num_samples, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
 
                         # combine
                         images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
                         label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
-                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), sensitive_features.numpy(), sensitive_labels.numpy(), config=self.all_config, device=self.device)
+                        image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
+                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device)
                         logging.info("PE Selecting end!")
 
                         # constractiving learning
@@ -1004,6 +1013,9 @@ class PE_Diffusion(DPSynther):
             syn_data = []
             syn_labels = []
 
+        if 'pe_last' in config and config['pe_last']:
+            config.data_num = int(config.data_num / config.selection_ratio)
+
         # Loop to generate the required number of samples
         for _ in range(config.data_num // (sampling_shape[0] * self.global_size) + 1):
             # Generate a batch of samples and labels
@@ -1036,6 +1048,10 @@ class PE_Diffusion(DPSynther):
             # Concatenate all collected synthetic data and labels
             syn_data = np.concatenate(syn_data)
             syn_labels = np.concatenate(syn_labels)
+
+            if 'pe_last' in config and config['pe_last']:
+                syn_data, syn_labels, _, _ = self.pe_vote(torch.from_numpy(syn_data), syn_labels, None, self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.selection_ratio, config=self.all_config, device=self.device)
+                syn_data = syn_data.numpy()
             
             np.savez(os.path.join(config.log_dir, "gen.npz"), x=syn_data, y=syn_labels)
             
