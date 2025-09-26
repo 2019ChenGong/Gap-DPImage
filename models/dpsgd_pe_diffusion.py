@@ -820,19 +820,15 @@ class PE_Diffusion(DPSynther):
         for x, y in self.freq_train_loader:
             freq_images.append(x)
             freq_labels.append(y)
-            # features_batch = self.inception_model.get_feature_batch(x)
-            # freq_features.append(features_batch)
+
         for x, y in self.time_dataloader:
             time_images.append(x)
             time_labels.append(y)
-            # features_batch = self.inception_model.get_feature_batch(x)
-            # time_features.append(features_batch)
+
         freq_images = torch.cat(freq_images)[:500]
         freq_labels = torch.cat(freq_labels)[:500]
         time_images = torch.cat(time_images)
         time_labels = torch.cat(time_labels)
-        # freq_features = torch.cat(freq_features)
-        # time_features = torch.cat(time_features)
 
         sensitive_features = []
         sensitive_labels = []
@@ -928,10 +924,13 @@ class PE_Diffusion(DPSynther):
                         images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
                         label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
                         image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
+
                         fid_before_selection = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
                         top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler)
+                        
                         fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
                         fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+
                         if self.global_rank == 0:
                             logging.info("PE Selecting end!")
                             logging.info(f"fid_before_selection: {fid_before_selection} fid_top: {fid_top} fid_bottom: {fid_bottom}")
