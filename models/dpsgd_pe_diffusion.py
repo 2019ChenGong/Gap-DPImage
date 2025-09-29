@@ -1120,8 +1120,10 @@ class PE_Diffusion(DPSynther):
             syn_labels = np.concatenate(syn_labels)
 
             if 'pe_last' in config and config['pe_last']:
+                logging.info("PE selecting at last start!")
                 syn_data, syn_labels, _, _ = self.pe_vote(torch.from_numpy(syn_data), syn_labels, None, self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.selection_ratio, config=self.all_config, device=self.device)
                 syn_data = syn_data.numpy()
+                logging.info("PE selecting at last end!")
             
             np.savez(os.path.join(config.log_dir, "gen.npz"), x=syn_data, y=syn_labels)
             
