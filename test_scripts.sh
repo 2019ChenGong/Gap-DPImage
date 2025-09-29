@@ -22,3 +22,6 @@ python run.py setup.n_gpus_per_node=4 --method PE-SGD --data_name mnist_28 --eps
 python run.py setup.n_gpus_per_node=3 --method PE-SGD --data_name mnist_28 --epsilon 10.0 eval.mode=val pretrain.mode=time_freq train.pe_freq=[10,20,30,40,50,60] train.contrastive_batch_size=256 train.contrastive_n_epochs=5 train.contrastive=v1 train.contrastive_alpha=1.0 train.contrastive_num_samples=1000 train.contrastive_selection_ratio=0.1 -ed pe60_contrastive_v1
 
 python run.py setup.n_gpus_per_node=3 --method PE-SGD --data_name mnist_28 --epsilon 10.0 eval.mode=val pretrain.mode=time_freq train.pe_freq=[10,20,30,40,50,60] train.contrastive_batch_size=256 train.contrastive_n_epochs=5 train.contrastive=v2 train.contrastive_alpha=1.0 train.contrastive_num_samples=1000 train.contrastive_selection_ratio=0.1 -ed pe60_contrastive_v2
+
+# variation
+python run.py setup.n_gpus_per_node=4 --method PE-SGD --data_name mnist_28 --epsilon 10.0 eval.mode=val pretrain.mode=time_freq train.pe_variation=true
