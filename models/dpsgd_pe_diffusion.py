@@ -27,10 +27,8 @@ from models.DP_Diffusion.rnd import Rnd
 from models.DP_MERF.rff_mmd_approx import data_label_embedding, get_rff_mmd_loss, noisy_dataset_embedding
 from data.dataset_loader import CentralDataset
 
-# from models.PE.pe.feature_extractor import extract_features
-# from models.PE.pe.metrics import make_fid_stats
-# from models.PE.pe.metrics import compute_fid
 from models.PE.pe.dp_counter import dp_nn_histogram
+from models.PE.apis.improved_diffusion.gaussian_diffusion import create_gaussian_diffusion
 
 
 import importlib
@@ -575,24 +573,6 @@ class PE_Diffusion(DPSynther):
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
             self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
             self.pretrain(freq_train_loader, self.all_config.pretrain)
-            
-            # from models.model_loader import load_model
-            # model_sur, config_sur = load_model(self.all_config)
-            # config_sur.gen.log_dir = self.all_config.pretrain.log_dir + "/gen"
-            # model_sur.pretrain_freq(sensitive_train_loader, self.all_config.pretrain)
-            # syn_data, syn_labels = model_sur.generate(config_sur.gen, config_sur.model.sampler)
-            # del model_sur
-            # dist.barrier()
-
-            # self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir[:-8] + 'pretrain_freq'
-            # self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
-            # self.all_config.pretrain.batch_size = self.all_config.pretrain.batch_size_freq
-
-            # syn = np.load(os.path.join(config_sur.gen.log_dir, 'gen.npz'))
-            # syn_data, syn_labels = syn["x"], syn["y"]
-            # freq_train_set = TensorDataset(torch.from_numpy(syn_data).float(), torch.from_numpy(syn_labels).long())
-            # freq_train_loader = torch.utils.data.DataLoader(dataset=freq_train_set, shuffle=True, drop_last=True, batch_size=self.all_config.pretrain.batch_size, num_workers=16)
-            # self.pretrain(freq_train_loader, self.all_config.pretrain)
         elif self.all_config.pretrain.mode == 'freq':
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_freq'
             self.all_config.pretrain.n_epochs = self.all_config.pretrain.n_epochs_freq
@@ -615,6 +595,208 @@ class PE_Diffusion(DPSynther):
         self.time_dataloader = time_dataloader
         torch.cuda.empty_cache()
         return config
+
+    def pe_pretrain(self, public_dataloader, config):
+        if public_dataloader is None or config.n_epochs == 0:
+            # If no public dataloader is provided, set pretraining flag to False and return.
+            self.is_pretrain = False
+            return
+        
+        # Set the number of classes in the loss function to the number of private classes.
+        config.loss.n_classes = self.private_num_classes
+        if config.cond:
+            # If conditional training is enabled, set the label unconditioning probability.
+            config.loss['label_unconditioning_prob'] = 0.1
+        else:
+            # If conditional training is disabled, set the label unconditioning probability to 1.0.
+            config.loss['label_unconditioning_prob'] = 1.0
+
+        # Set the CUDA device based on the local rank.
+        torch.cuda.device(self.local_rank)
+        self.device = 'cuda:%d' % self.local_rank
+
+        # Define directories for storing samples and checkpoints.
+        sample_dir = os.path.join(config.log_dir, 'samples')
+        checkpoint_dir = os.path.join(config.log_dir, 'checkpoints')
+
+        if self.global_rank == 0:
+            # Create necessary directories if the global rank is 0.
+            make_dir(config.log_dir)
+            make_dir(sample_dir)
+            make_dir(checkpoint_dir)
+
+        # Wrap the model with DistributedDataParallel (DDP) for distributed training.
+        model = DDP(self.model, device_ids=[self.local_rank])
+        ema = ExponentialMovingAverage(model.parameters(), decay=self.ema_rate)
+
+        # Initialize the optimizer based on the configuration.
+        if config.optim.optimizer == 'Adam':
+            optimizer = torch.optim.Adam(model.parameters(), **config.optim.params)
+        elif config.optim.optimizer == 'SGD':
+            optimizer = torch.optim.SGD(model.parameters(), **config.optim.params)
+        else:
+            raise NotImplementedError("Optimizer not supported")
+
+        # Initialize the training state.
+        state = dict(model=model, ema=ema, optimizer=optimizer, step=0)
+
+        if self.global_rank == 0:
+            # Log the number of trainable parameters and training details if the global rank is 0.
+            model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+            n_params = sum([np.prod(p.size()) for p in model_parameters])
+            logging.info('Number of trainable parameters in model: %d' % n_params)
+            logging.info('Number of total epochs: %d' % config.n_epochs)
+            logging.info('Starting training at step %d' % state['step'])
+        dist.barrier()
+
+        # Create a distributed data loader for the public dataset.
+        dataset_loader = torch.utils.data.DataLoader(
+            dataset=public_dataloader.dataset, 
+            batch_size=config.batch_size // self.global_size, 
+            sampler=DistributedSampler(public_dataloader.dataset), 
+            pin_memory=True, 
+            drop_last=True, 
+            num_workers=4 if config.batch_size // self.global_size > 8 else 0
+        )
+
+        # Initialize the loss function based on the configuration.
+        if config.loss.version == 'edm':
+            loss_fn = EDMLoss(**config.loss).get_loss
+        elif config.loss.version == 'vpsde':
+            loss_fn = VPSDELoss(**config.loss).get_loss
+        elif config.loss.version == 'vesde':
+            loss_fn = VESDELoss(**config.loss).get_loss
+        elif config.loss.version == 'v':
+            loss_fn = VLoss(**config.loss).get_loss
+        else:
+            raise NotImplementedError("Loss function version not supported")
+
+        # Initialize the Inception model for feature extraction.
+        inception_model = InceptionFeatureExtractor()
+        inception_model.model = inception_model.model.to(self.device)
+
+        def sampler(x, y=None):
+            if self.sampler.type == 'ddim':
+                return ddim_sampler(x, y, model, **self.sampler)
+            elif self.sampler.type == 'edm':
+                return edm_sampler(x, y, model, **self.sampler)
+            else:
+                raise NotImplementedError("Sampler type not supported")
+
+        # Define the shape of the batches for sampling and FID computation.
+        snapshot_sampling_shape = (self.sampler.snapshot_batch_size,
+                                self.network.num_in_channels, 
+                                self.network.image_size, 
+                                self.network.image_size)
+        fid_sampling_shape = (self.sampler.fid_batch_size, 
+                            self.network.num_in_channels, 
+                            self.network.image_size, 
+                            self.network.image_size)
+
+        # Training loop over the specified number of epochs.
+        for epoch in range(config.n_epochs):
+            dataset_loader.sampler.set_epoch(epoch)
+            for _, batch in enumerate(dataset_loader):
+
+                if len(batch) == 2:
+                    train_x, train_y = batch
+                    label = None
+                else:
+                    train_x, train_y, label = batch
+
+                # Save snapshots and checkpoints at specified intervals.
+                if state['step'] % config.snapshot_freq == 0 and state['step'] >= config.snapshot_threshold and self.global_rank == 0:
+                    logging.info('Saving snapshot checkpoint and sampling single batch at iteration %d.' % state['step'])
+
+                    model.eval()
+                    with torch.no_grad():
+                        ema.store(model.parameters())
+                        ema.copy_to(model.parameters())
+                        sample_random_image_batch(snapshot_sampling_shape, sampler, os.path.join(
+                            sample_dir, 'iter_%d' % state['step']), self.device, self.private_num_classes)
+                        ema.restore(model.parameters())
+                    model.train()
+
+                    save_checkpoint(os.path.join(checkpoint_dir, 'snapshot_checkpoint.pth'), state)
+                dist.barrier()
+
+                # Compute FID at specified intervals.
+                # if state['step'] % config.fid_freq == 0 and state['step'] >= config.fid_threshold:
+                #     model.eval()
+                #     with torch.no_grad():
+                #         ema.store(model.parameters())
+                #         ema.copy_to(model.parameters())
+                #         fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                #         ema.restore(model.parameters())
+
+                #         if self.global_rank == 0:
+                #             logging.info('FID at iteration %d: %.6f' % (state['step'], fid))
+                #     model.train()
+                # dist.barrier()
+
+                # Compute FID at each epoch.
+                model.eval()
+                with torch.no_grad():
+                    ema.store(model.parameters())
+                    ema.copy_to(model.parameters())
+                    fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                    ema.restore(model.parameters())
+
+                    if self.global_rank == 0:
+                        logging.info('FID at iteration %d: %.6f' % (state['step'], fid))
+                model.train()
+                dist.barrier()
+
+                # Save checkpoints at specified intervals.
+                if state['step'] % config.save_freq == 0 and state['step'] >= config.save_threshold and self.global_rank == 0:
+                    checkpoint_file = os.path.join(
+                        checkpoint_dir, 'checkpoint_%d.pth' % state['step'])
+                    save_checkpoint(checkpoint_file, state)
+                    logging.info('Saving checkpoint at iteration %d' % state['step'])
+                dist.barrier()
+
+                # Prepare the input data for training.
+                train_x, train_y = train_x.to(self.device) * 2. - 1., train_y.to(self.device)
+                optimizer.zero_grad(set_to_none=True)
+                loss = loss_fn(model, train_x, train_y)
+                if label is not None:
+                    label = label.to(self.device)
+                    if self.all_config.train.contrastive == 'v1':
+                        loss = (loss * label.float() + loss * (label.float()-1) * self.all_config.train.contrastive_alpha).mean()
+                    elif self.all_config.train.contrastive == 'v2':
+                        features = model(train_x, torch.ones_like(train_y).float(), train_y, return_feature=True)
+                        contrastive_loss = compute_loss(features.reshape(features.shape[0], -1), label)
+                        loss = (loss * label.float()).mean() + contrastive_loss * self.all_config.train.contrastive_alpha
+                else:
+                    loss = loss.mean()
+                loss.backward()
+                optimizer.step()
+
+                # Log the loss at specified intervals.
+                if (state['step'] + 1) % config.log_freq == 0 and self.global_rank == 0:
+                    logging.info('Loss: %.4f, step: %d' % (loss.item(), state['step'] + 1))
+                dist.barrier()
+
+                state['step'] += 1
+                state['ema'].update(model.parameters())
+            if self.global_rank == 0:
+                logging.info('Completed Epoch %d' % (epoch + 1))
+            torch.cuda.empty_cache()
+
+        # Save the final checkpoint.
+        if self.global_rank == 0:
+            checkpoint_file = os.path.join(checkpoint_dir, 'final_checkpoint.pth')
+            save_checkpoint(checkpoint_file, state)
+            logging.info('Saving final checkpoint.')
+        dist.barrier()
+
+        # Apply the EMA weights to the model and store the EMA object.
+        ema.copy_to(self.model.parameters())
+        self.ema = ema
+
+        # Clean up the model and free GPU memory.
+        del model
+        torch.cuda.empty_cache()
 
     def pe_vote(self, images_to_selected, labels_to_selected, image_categories, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None, sampler=None):
         features_to_selected = []
@@ -683,6 +865,7 @@ class PE_Diffusion(DPSynther):
         return top_images, top_labels, bottom_images, bottom_labels
 
     def constractive_learning(self, top_x, top_y, bottom_x, bottom_y, epoch, config):
+
         if 'contrastive' in config and config['contrastive']:
             top_labels = np.ones_like(top_y)
             bottom_labels = np.zeros_like(bottom_y)
@@ -699,7 +882,7 @@ class PE_Diffusion(DPSynther):
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
         self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
         self.all_config.pretrain.batch_size = config.contrastive_batch_size
-        self.pretrain(contrastive_dataloader, self.all_config.pretrain)
+        self.pe_pretrain(contrastive_dataloader, self.all_config.pretrain)
         torch.cuda.empty_cache()
 
 
@@ -710,9 +893,6 @@ class PE_Diffusion(DPSynther):
         Args:
             sensitive_dataloader (DataLoader): DataLoader containing the sensitive data.
             config (Config): Configuration object containing various settings for training.
-
-        Returns:
-            None
         """
         
         if sensitive_dataloader is None or config.n_epochs == 0:
@@ -853,6 +1033,12 @@ class PE_Diffusion(DPSynther):
                 return edm_sampler(x, y, model, **self.sampler)
             else:
                 raise NotImplementedError("Sampler type not supported")
+        self._diffusion = create_gaussian_diffusion(
+            steps=1000,
+            learn_sigma=True,
+            noise_schedule="cosine",
+            timestep_respacing=str(self.sampler.num_steps),)
+        self._sigma_list = self._diffusion.sqrt_one_minus_alphas_cumprod / self._diffusion.sqrt_alphas_cumprod
 
         # Define the shapes for sampling images.
         snapshot_sampling_shape = (self.sampler.snapshot_batch_size,
@@ -929,7 +1115,7 @@ class PE_Diffusion(DPSynther):
                         image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
 
                         fid_before_selection = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
-                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler if 'pe_variation' in config else None)
+                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler if 'pe_variation' in config and config['pe_variation'] else None)
                         
                         fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
                         fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
@@ -939,7 +1125,6 @@ class PE_Diffusion(DPSynther):
                             logging.info(f"fid_before_selection: {fid_before_selection} fid_top: {fid_top} fid_bottom: {fid_bottom}")
 
                         # constractiving learning
-                        # model = model.to('cpu')
                         torch.cuda.empty_cache()
                         self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config)
                         if self.global_rank == 0:
@@ -1012,38 +1197,16 @@ class PE_Diffusion(DPSynther):
 
         self.ema = ema
 
-    # def image_variation(self, images, labels,
-    #                     num_variations_per_image, size, variation_degree):
-    #     # width, height = list(map(int, size.split('x')))
-    #     # if width != self._image_size or height != self._image_size:
-    #     #     raise ValueError(
-    #     #         f'width and height must be equal to {self._image_size}')
-    #     images = images.astype(np.float32) / 127.5 - 1.0
-    #     images = images.transpose(0, 3, 1, 2)
-    #     variations = []
-    #     for _ in tqdm(range(num_variations_per_image)):
-    #         sub_variations = self._image_variation(
-    #             images=images,
-    #             labels=labels,
-    #             variation_degree=variation_degree)
-    #         variations.append(sub_variations)
-    #     variations = np.stack(variations, axis=1)
-
-    #     # variations = _round_to_uint8((variations + 1.0) * 127.5)
-    #     # variations = variations.transpose(0, 1, 3, 4, 2)
-    #     torch.cuda.empty_cache()
-    #     return variations
-
     def _image_variation(self, images, labels, variation_degree=0.1, sampler=None, batch_size=100):
         samples = []
         images_list = torch.split(images, split_size_or_sections=batch_size)
         labels_list = torch.split(torch.from_numpy(labels).long(), split_size_or_sections=batch_size)
         for i in range(len(images_list)):
             with torch.no_grad():
-                # x = self._sampler(images_list[i].to(dist_util.dev()), labels_list[i].to(dist_util.dev()), start_t=variation_degree/1000)
-                x = sampler(images_list[i].to(self.device), labels_list[i].to(self.device), start_sigma=variation_degree*10)
+                sigma_idx = len(self._sigma_list) - len(self.sampler.num_steps * (1-variation_degree))
+                sigma_idx = max(min(sigma_idx, len(self._sigma_list)-1), 0)
+                x = sampler(images_list[i].to(self.device), labels_list[i].to(self.device), start_sigma=self._sigma_list[sigma_idx])
             samples.append(x.detach().cpu())
-            # logging.info(f"Created {(i+1)*self._batch_size} samples")
         samples = torch.cat(samples).clamp(-1., 1.)
 
         return (samples + 1) / 2
