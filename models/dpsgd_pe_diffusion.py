@@ -25,7 +25,7 @@ from torch.utils.data import random_split, TensorDataset, Dataset, DataLoader, C
 
 from models.DP_Diffusion.rnd import Rnd
 from models.DP_MERF.rff_mmd_approx import data_label_embedding, get_rff_mmd_loss, noisy_dataset_embedding
-from data.dataset_loader import CentralDataset
+from data.dataset_loader import CentralDataset, random_aug
 
 from models.PE.pe.dp_counter import dp_nn_histogram
 from models.PE.apis.improved_diffusion.gaussian_diffusion import create_gaussian_diffusion
@@ -862,6 +862,7 @@ class PE_Diffusion(DPSynther):
             top_images = self._image_variation(top_images, top_labels, sampler=sampler)
             bottom_images = self._image_variation(bottom_images, bottom_labels, sampler=sampler)
         torch.cuda.empty_cache()
+
         return top_images, top_labels, bottom_images, bottom_labels
 
     def constractive_learning(self, top_x, top_y, bottom_x, bottom_y, epoch, config):
@@ -882,6 +883,7 @@ class PE_Diffusion(DPSynther):
             self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
         self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
         self.all_config.pretrain.batch_size = config.contrastive_batch_size
+
         self.pe_pretrain(contrastive_dataloader, self.all_config.pretrain)
         torch.cuda.empty_cache()
 
@@ -1120,6 +1122,9 @@ class PE_Diffusion(DPSynther):
                         fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
                         fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
 
+                        # self.trans = random_aug(magnitude=9, num_ops=2)
+                        # top_x = self.trans(top_x)[0].float() / 255.
+
                         if self.global_rank == 0:
                             logging.info("PE Selecting end!")
                             logging.info(f"fid_before_selection: {fid_before_selection} fid_top: {fid_top} fid_bottom: {fid_bottom}")
@@ -1127,6 +1132,7 @@ class PE_Diffusion(DPSynther):
                         # constractiving learning
                         torch.cuda.empty_cache()
                         self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config)
+
                         if self.global_rank == 0:
                             indices = torch.randperm(images_to_select.size(0))
                             images_to_select = images_to_select[indices]
