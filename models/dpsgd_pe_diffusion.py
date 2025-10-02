@@ -1203,8 +1203,8 @@ class PE_Diffusion(DPSynther):
         labels_list = torch.split(torch.from_numpy(labels).long(), split_size_or_sections=batch_size)
         for i in range(len(images_list)):
             with torch.no_grad():
-                sigma_idx = len(self._sigma_list) - len(self.sampler.num_steps * (1-variation_degree))
-                sigma_idx = max(min(sigma_idx, len(self._sigma_list)-1), 0)
+                sigma_idx = int(len(self._sigma_list) * (1 - variation_degree))
+                sigma_idx = max(0, min(sigma_idx, len(self._sigma_list) - 1))
                 x = sampler(images_list[i].to(self.device), labels_list[i].to(self.device), start_sigma=self._sigma_list[sigma_idx])
             samples.append(x.detach().cpu())
         samples = torch.cat(samples).clamp(-1., 1.)
