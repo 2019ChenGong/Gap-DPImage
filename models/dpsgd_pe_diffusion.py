@@ -37,11 +37,112 @@ opacus = importlib.import_module('opacus')
 from opacus import PrivacyEngine
 from opacus.utils.batch_memory_manager import BatchMemoryManager
 from opacus.distributed import DifferentiallyPrivateDistributedDataParallel as DPDDP
+import torch
+import numpy as np
 
 from models.synthesizer import DPSynther
+from PIL import Image
 
 
 import torch.nn.functional as F
+
+def print_dimensions_and_range(top_x, top_y, global_rank=0):
+    """
+    Prints the dimensions and value ranges of top_x and top_y tensors.
+    
+    Args:
+        top_x (torch.Tensor): The tensor for images or features.
+        top_y (torch.Tensor | np.ndarray): The tensor/array for labels.
+    """
+    # 只在主进程（rank 0）中打印，避免分布式训练中的重复输出
+    if global_rank != 0:
+        return
+        
+    import traceback
+    
+
+    
+    # Dimensions and range for top_x
+    print("Dimensions of top_x:", top_x.shape)
+    print("Value range of top_x: min =", top_x.min().item(), ", max =", top_x.max().item())
+    if top_x.dtype in [torch.float32, torch.float64]:
+        print("Mean of top_x:", top_x.mean().item())
+        print("Standard deviation of top_x:", top_x.std().item())
+    
+    # Dimensions and range for top_y
+    print("\nDimensions of top_y:", top_y.shape)
+    if torch.is_tensor(top_y):
+        print("Value range of top_y: min =", top_y.min().item(), ", max =", top_y.max().item())
+        unique_labels = torch.unique(top_y)
+        print("Unique labels in top_y:", unique_labels.tolist())
+        if top_y.dtype == torch.int64:
+            distribution = torch.bincount(top_y.long())
+            print("Label distribution:", distribution.tolist())
+    else:
+        # numpy array
+        print("Value range of top_y: min =", np.min(top_y), ", max =", np.max(top_y))
+        unique_labels = np.unique(top_y)
+        print("Unique labels in top_y:", unique_labels.tolist())
+        if np.issubdtype(top_y.dtype, np.integer):
+            distribution = np.bincount(top_y.astype(np.int64))
+            print("Label distribution:", distribution.tolist())
+
+def augment_data(images, labels, aug_factor=8, magnitude=9, num_ops=2):
+    """
+    Augments the images using random augmentation to multiply the dataset size by aug_factor.
+    
+    Args:
+        images (torch.Tensor): Input images tensor of shape [N, C, H, W], values in [0, 1].
+        labels (torch.Tensor): Labels tensor of shape [N].
+        aug_factor (int): Factor to multiply the dataset size by.
+        magnitude (int): Magnitude for RandAugment.
+        num_ops (int): Number of operations for RandAugment.
+    
+    Returns:
+        torch.Tensor: Augmented images [N * aug_factor, C, H, W].
+        torch.Tensor: Augmented labels [N * aug_factor].
+    """
+    N, C, H, W = images.shape
+    augmented_images = []
+    augmented_labels = []
+    
+    trans = random_aug(magnitude=magnitude, num_ops=num_ops)
+    
+    for _ in range(aug_factor):
+        aug_batch = []
+        for i in range(N):
+            # Convert tensor to numpy array (assuming [0, 1] float)
+            img_np = (images[i].cpu().permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            
+            # Handle grayscale to RGB if C==1
+            if C == 1:
+                img_np = np.repeat(img_np[:, :, np.newaxis], 3, axis=2)
+            
+            # Convert to PIL Image
+            pil_img = Image.fromarray(img_np)
+            
+            # Apply augmentation
+            aug_pil = trans(pil_img)
+            
+            # Convert back to numpy float [0, 1]
+            aug_np = np.array(aug_pil).astype(np.float32) / 255.0
+            
+            # Handle back to grayscale if original C==1
+            if C == 1:
+                aug_np = np.mean(aug_np, axis=2, keepdims=True)
+            
+            # Convert to tensor [C, H, W]
+            aug_tensor = torch.from_numpy(aug_np).permute(2, 0, 1).float()
+            aug_batch.append(aug_tensor)
+        
+        aug_batch = torch.stack(aug_batch)  # [N, C, H, W]
+        augmented_images.append(aug_batch)
+        augmented_labels.append(labels.clone())
+    
+    augmented_images = torch.cat(augmented_images, dim=0)  # [N*aug_factor, C, H, W]
+    augmented_labels = torch.cat(augmented_labels, dim=0)  # [N*aug_factor]
+    
+    return augmented_images, augmented_labels
 
 def compute_loss(features, labels, temperature=0.5):
     """
@@ -735,17 +836,6 @@ class PE_Diffusion(DPSynther):
                 # dist.barrier()
 
                 # Compute FID at each epoch.
-                model.eval()
-                with torch.no_grad():
-                    ema.store(model.parameters())
-                    ema.copy_to(model.parameters())
-                    fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
-                    ema.restore(model.parameters())
-
-                    if self.global_rank == 0:
-                        logging.info('FID at iteration %d: %.6f' % (state['step'], fid))
-                model.train()
-                dist.barrier()
 
                 # Save checkpoints at specified intervals.
                 if state['step'] % config.save_freq == 0 and state['step'] >= config.save_threshold and self.global_rank == 0:
@@ -779,6 +869,20 @@ class PE_Diffusion(DPSynther):
 
                 state['step'] += 1
                 state['ema'].update(model.parameters())
+
+            # Compute FID at each epoch.
+            model.eval()
+            with torch.no_grad():
+                ema.store(model.parameters())
+                ema.copy_to(model.parameters())
+                fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                ema.restore(model.parameters())
+
+                if self.global_rank == 0:
+                    logging.info('FID at epoch %d: %.6f' % (epoch + 1, fid))
+            model.train()
+            dist.barrier()
+            
             if self.global_rank == 0:
                 logging.info('Completed Epoch %d' % (epoch + 1))
             torch.cuda.empty_cache()
@@ -844,12 +948,24 @@ class PE_Diffusion(DPSynther):
             bottom_indices.append(selected_bad_indices)
 
         top_indices = np.concatenate(top_indices)
+        if self.global_rank == 0:
+            logging.info(f"Before unique - top_indices length: {len(top_indices)}")
+        # 去重，避免重复选择同一个样本
+        top_indices = np.unique(top_indices)
+        if self.global_rank == 0:
+            logging.info(f"After unique - top_indices length: {len(top_indices)}")
         top_images = images_to_selected[top_indices]
         top_labels = labels_to_selected[top_indices]
         if image_categories is not None:
             top_categories = image_categories[top_indices]
 
         bottom_indices = np.concatenate(bottom_indices)
+        if self.global_rank == 0:
+            logging.info(f"Before unique - bottom_indices length: {len(bottom_indices)}")
+        # 去重，避免重复选择同一个样本
+        bottom_indices = np.unique(bottom_indices)
+        if self.global_rank == 0:
+            logging.info(f"After unique - bottom_indices length: {len(bottom_indices)}")
         bottom_images = images_to_selected[bottom_indices]
         bottom_labels = labels_to_selected[bottom_indices]
         if image_categories is not None:
@@ -1051,6 +1167,101 @@ class PE_Diffusion(DPSynther):
         # Start the training loop.
         for epoch in range(config.n_epochs):
             pe_lock = True
+            
+            # PE training at epoch level (not batch level)
+            if epoch in pe_freq and pe_lock:
+                # PE training
+                """
+                Key hyper-parameter:
+                1. voting epoch interval; 2. voting privacy budget; 3. synthetic image size; 
+                4. mean and frequency image size; 5. top and bottom image size;
+                """
+                if self.global_rank == 0:
+                    logging.info("PE training start!")
+
+                # 确保所有进程使用相同的随机种子来生成样本
+                torch.manual_seed(42)
+                np.random.seed(42)
+                
+                gen_x, gen_y = generate_batch(sampler, (config.contrastive_num_samples, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
+
+                # combine
+                images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
+                label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
+                image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
+
+                fid_before_selection = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                
+                pe_variation_enabled = hasattr(config, 'pe_variation') and config.pe_variation
+                sampler_to_use = sampler if pe_variation_enabled else None
+                if self.global_rank == 0:
+                    logging.info(f"pe_variation enabled: {pe_variation_enabled}, sampler_to_use: {sampler_to_use is not None}")
+                
+                torch.manual_seed(42)
+                np.random.seed(42)
+                
+                # 所有进程都执行pe_vote，但由于相同的随机种子，结果应该一致
+                top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler_to_use)
+
+                print_dimensions_and_range(top_x, top_y, self.global_rank)
+
+                top_x, top_y = augment_data(top_x, top_y, aug_factor=8, magnitude=9, num_ops=2)
+
+                print_dimensions_and_range(top_x, top_y, self.global_rank)
+                
+                fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+
+                if self.global_rank == 0:
+                    logging.info("PE Selecting end!")
+                    logging.info(f"fid_before_selection: {fid_before_selection} fid_top: {fid_top} fid_bottom: {fid_bottom}")
+
+                # constractiving learning
+                torch.cuda.empty_cache()
+                self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config)
+
+                if self.global_rank == 0:
+                    indices = torch.randperm(images_to_select.size(0))
+                    images_to_select = images_to_select[indices]
+                    label_to_select = label_to_select[indices]
+
+                    # 修复NumPy数组的索引问题
+                    indices = torch.randperm(top_x.size(0))
+                    top_x = top_x[indices]
+                    top_y = top_y[indices.cpu().numpy()]  # 转换为numpy索引
+
+                    indices = torch.randperm(bottem_x.size(0))
+                    bottem_x = bottem_x[indices]
+                    bottem_y = bottem_y[indices.cpu().numpy()]  # 转换为numpy索引
+
+                    show_images = []
+                    for cls in range(self.private_num_classes):
+                        show_images.append(images_to_select[label_to_select==cls][:8])
+                    show_images = np.concatenate(show_images)
+                    torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'no_selected_samples.png'), padding=1, nrow=8)
+
+                    show_images = []
+                    for cls in range(self.private_num_classes):
+                        # 修复NumPy数组的布尔索引问题
+                        mask = (top_y == cls)
+                        if np.any(mask):
+                            show_images.append(top_x[mask][:8])
+                    if show_images:
+                        show_images = np.concatenate(show_images)
+                        torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'top_sample.png'), padding=1, nrow=8)
+
+                    show_images = []
+                    for cls in range(self.private_num_classes):
+                        # 修复NumPy数组的布尔索引问题
+                        mask = (bottem_y == cls)
+                        if np.any(mask):
+                            show_images.append(bottem_x[mask][:8])
+                    if show_images:
+                        show_images = np.concatenate(show_images)
+                        torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'bottom_sample.png'), padding=1, nrow=8)
+                    logging.info("PE training end!")
+                pe_lock = False
+            
             with BatchMemoryManager(
                     data_loader=dataset_loader,
                     max_physical_batch_size=config.dp.max_physical_batch_size,
@@ -1099,72 +1310,6 @@ class PE_Diffusion(DPSynther):
                             'Saving checkpoint at iteration %d' % state['step'])
                     dist.barrier()
                     
-                    if epoch in pe_freq and not optimizer._is_last_step_skipped and pe_lock:
-                        # PE training
-                        """
-                        Key hyper-parameter:
-                        1. voting epoch interval; 2. voting privacy budget; 3. synthetic image size; 
-                        4. mean and frequency image size; 5. top and bottom image size;
-                        """
-                        if self.global_rank == 0:
-                            logging.info("PE training start!")
-
-                        gen_x, gen_y = generate_batch(sampler, (config.contrastive_num_samples, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
-
-                        # combine
-                        images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
-                        label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
-                        image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
-
-                        fid_before_selection = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
-                        top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler if 'pe_variation' in config and config['pe_variation'] else None)
-                        
-                        fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
-                        fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
-
-                        # self.trans = random_aug(magnitude=9, num_ops=2)
-                        # top_x = self.trans(top_x)[0].float() / 255.
-
-                        if self.global_rank == 0:
-                            logging.info("PE Selecting end!")
-                            logging.info(f"fid_before_selection: {fid_before_selection} fid_top: {fid_top} fid_bottom: {fid_bottom}")
-
-                        # constractiving learning
-                        torch.cuda.empty_cache()
-                        self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config)
-
-                        if self.global_rank == 0:
-                            indices = torch.randperm(images_to_select.size(0))
-                            images_to_select = images_to_select[indices]
-                            label_to_select = label_to_select[indices]
-
-                            indices = torch.randperm(top_x.size(0))
-                            top_x = top_x[indices]
-                            top_y = top_y[indices]
-
-                            indices = torch.randperm(bottem_x.size(0))
-                            bottem_x = bottem_x[indices]
-                            bottem_y = bottem_y[indices]
-
-                            show_images = []
-                            for cls in range(self.private_num_classes):
-                                show_images.append(images_to_select[label_to_select==cls][:8])
-                            show_images = np.concatenate(show_images)
-                            torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'no_selected_samples.png'), padding=1, nrow=8)
-
-                            show_images = []
-                            for cls in range(self.private_num_classes):
-                                show_images.append(top_x[top_y==cls][:8])
-                            show_images = np.concatenate(show_images)
-                            torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'top_sample.png'), padding=1, nrow=8)
-
-                            show_images = []
-                            for cls in range(self.private_num_classes):
-                                show_images.append(bottem_x[bottem_y==cls][:8])
-                            show_images = np.concatenate(show_images)
-                            torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'bottom_sample.png'), padding=1, nrow=8)
-                            logging.info("PE training end!")
-                        pe_lock = False
 
                     if len(train_y.shape) == 2:
                         # Preprocess the input data.
@@ -1204,18 +1349,38 @@ class PE_Diffusion(DPSynther):
         self.ema = ema
 
     def _image_variation(self, images, labels, variation_degree=0.1, sampler=None, batch_size=100):
+        if self.global_rank == 0:
+            logging.info(f"_image_variation input - images shape: {images.shape}, labels shape: {labels.shape}")
+        
         samples = []
         images_list = torch.split(images, split_size_or_sections=batch_size)
         labels_list = torch.split(torch.from_numpy(labels).long(), split_size_or_sections=batch_size)
+        
+        if self.global_rank == 0:
+            logging.info(f"Split into {len(images_list)} batches, batch sizes: {[batch.size(0) for batch in images_list]}")
+        
+        # 确保处理所有批次，包括最后一个不完整的批次
         for i in range(len(images_list)):
+            if images_list[i].size(0) == 0:  # 跳过空批次
+                if self.global_rank == 0:
+                    logging.info(f"Skipping empty batch {i}")
+                continue
             with torch.no_grad():
                 sigma_idx = int(len(self._sigma_list) * (1 - variation_degree))
                 sigma_idx = max(0, min(sigma_idx, len(self._sigma_list) - 1))
                 x = sampler(images_list[i].to(self.device), labels_list[i].to(self.device), start_sigma=self._sigma_list[sigma_idx])
             samples.append(x.detach().cpu())
-        samples = torch.cat(samples).clamp(-1., 1.)
-
-        return (samples + 1) / 2
+        
+        if samples:  # 确保有样本才进行拼接
+            samples = torch.cat(samples).clamp(-1., 1.)
+            result = (samples + 1) / 2
+            if self.global_rank == 0:
+                logging.info(f"_image_variation output - result shape: {result.shape}")
+            return result
+        else:
+            if self.global_rank == 0:
+                logging.info("No samples processed, returning original images")
+            return images  # 如果没有样本，返回原始图像
 
     def generate(self, config, sampler_config=None):
 
