@@ -45,6 +45,9 @@ def load_model(config, sess=None):
     elif config.setup.method == 'dp-pe':
         from models.dpsgd_pe_diffusion import PE_Diffusion
         model = PE_Diffusion(config.model, config.setup.local_rank, config)
+    elif config.setup.method == 'dp-noise':
+        from models.dpsgd_noise_diffusion import PE_Diffusion
+        model = PE_Diffusion(config.model, config.setup.local_rank, config)
     else:
         raise NotImplementedError('{} is not yet implemented.'.format(config.setup.method))
 

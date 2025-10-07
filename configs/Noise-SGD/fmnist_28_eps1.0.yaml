@@ -1,5 +1,5 @@
 setup:
-  method: dp-noise
+  method: dp-pe
   run_type: torchmp
   n_gpus_per_node: 3
   n_nodes: 1
@@ -21,13 +21,13 @@ public_data:
     sigma: 5
     sample_num: 5
 sensitive_data:
-  name: mnist
+  name: fmnist
   num_channels: 1
   resolution: 28
   n_classes: 10
-  train_path: dataset/mnist/train_28.zip
-  test_path: dataset/mnist/test_28.zip
-  fid_stats: dataset/mnist/fid_stats_28.npz
+  train_path: dataset/fmnist/train_28.zip
+  test_path: dataset/fmnist/test_28.zip
+  fid_stats: dataset/fmnist/fid_stats_28.npz
 model:
   ckpt: null
   denoiser_name: edm
@@ -54,17 +54,17 @@ model:
     snapshot_batch_size: 80
     fid_batch_size: 256
   sampler_fid:
-    type: ddim
+    type: edm
     s_churn: 50
-    s_min: 0.05
+    s_min: 0.025
     s_max: 50
     num_steps: 1000
     tmin: 0.002
     tmax: 80.0
     rho: 7.0
-    guid_scale: 0.25
+    guid_scale: 1.0
   sampler_acc:
-    type: ddim
+    type: edm
     s_churn: 10
     s_min: 0.025
     s_max: 50
@@ -159,7 +159,7 @@ train:
     alpha_num: 0
     max_grad_norm: 0.001
     delta: 1e-5
-    epsilon: 10.0
+    epsilon: 1.0
     max_physical_batch_size: 8192
   n_splits: 32
   freq:
@@ -172,11 +172,11 @@ train:
     num_channels: 1
     resolution: 28
     dp:
-      epsilon: 10.0
+      epsilon: 1.0
       delta: 1e-5
     n_splits: 1
-  sigma_freq: 7.4
-  sigma_time: 5
+  sigma_freq: 26.6
+  sigma_time: 20
   sigma_sensitivity_ratio: 0.5
 gen:
   data_num: 60000

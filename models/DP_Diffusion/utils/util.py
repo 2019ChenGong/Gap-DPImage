@@ -64,10 +64,13 @@ def save_img(x, filename, figsize=None):
     plt.close()
 
 
-def sample_random_image_batch(sampling_shape, sampler, path, device, n_classes=None, name='sample'):
+def sample_random_image_batch(sampling_shape, sampler, path, device, n_classes=None, name='sample', noise=None):
     make_dir(path)
-
-    x = torch.randn(sampling_shape, device=device)
+    if noise is None:
+        x = torch.randn(sampling_shape, device=device)
+    else:
+        indices = torch.randperm(noise.size(0))[:sampling_shape[0]]
+        x = noise[indices].to(device)
     if n_classes is not None:
         if n_classes <= 10:
             num_per_cls = sampling_shape[0] // n_classes
@@ -93,14 +96,18 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2):
     fd = np.real(m + np.trace(sigma1 + sigma2 - s * 2))
     return fd
 
-def compute_fid(n_samples, n_gpus, sampling_shape, sampler, inception_model, stats_paths, device, n_classes=None):
+def compute_fid(n_samples, n_gpus, sampling_shape, sampler, inception_model, stats_paths, device, n_classes=None, noise=None):
     num_samples_per_gpu = int(np.ceil(n_samples / n_gpus))
 
     def generator(num_samples):
         num_sampling_rounds = int(
             np.ceil(num_samples / sampling_shape[0]))
         for _ in range(num_sampling_rounds):
-            x = torch.randn(sampling_shape, device=device)
+            if noise is None:
+                x = torch.randn(sampling_shape, device=device)
+            else:
+                indices = torch.randperm(noise.size(0))[:sampling_shape[0]]
+                x = noise[indices].to(device)
 
             if n_classes is not None:
                 y = torch.randint(n_classes, size=(

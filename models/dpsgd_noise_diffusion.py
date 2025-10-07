@@ -296,8 +296,7 @@ class PE_Diffusion(DPSynther):
             del state, new_state_dict  # Clean up memory
 
         self.is_pretrain = True  # Flag to indicate pretraining status
-        self.generate_noise = None
-        self.generate_y = None
+        self.generate_noise = torch.randn((config.noise_num, self.network.num_in_channels, self.network.image_size, self.network.image_size))
 
     def pretrain(self, public_dataloader, config):
         """
@@ -423,7 +422,7 @@ class PE_Diffusion(DPSynther):
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
                         sample_random_image_batch(snapshot_sampling_shape, sampler, os.path.join(
-                            sample_dir, 'iter_%d' % state['step']), self.device, self.private_num_classes)
+                            sample_dir, 'iter_%d' % state['step']), self.device, self.private_num_classes, noise=self.generate_noise)
                         ema.restore(model.parameters())
                     model.train()
 
@@ -436,7 +435,7 @@ class PE_Diffusion(DPSynther):
                     with torch.no_grad():
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
-                        fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                        fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes, noise=self.generate_noise)
                         ema.restore(model.parameters())
 
                         if self.global_rank == 0:
@@ -455,7 +454,7 @@ class PE_Diffusion(DPSynther):
                 # Prepare the input data for training.
                 train_x, train_y = train_x.to(self.device) * 2. - 1., train_y.to(self.device)
                 optimizer.zero_grad(set_to_none=True)
-                loss = loss_fn(model, train_x, train_y)
+                loss = loss_fn(model, train_x, train_y, noise=self.generate_noise)
                 if label is not None:
                     label = label.to(self.device)
                     if self.all_config.train.contrastive == 'v1':
@@ -900,10 +899,10 @@ class PE_Diffusion(DPSynther):
             # Compute FID at each epoch.
             model.eval()
             with torch.no_grad():
-                # ema.store(model.parameters())
-                # ema.copy_to(model.parameters())
+                ema.store(model.parameters())
+                ema.copy_to(model.parameters())
                 fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
-                # ema.restore(model.parameters())
+                ema.restore(model.parameters())
 
                 if self.global_rank == 0:
                     logging.info('FID at epoch %d: %.6f' % (epoch + 1, fid))
@@ -1314,7 +1313,7 @@ class PE_Diffusion(DPSynther):
                             ema.store(model.parameters())
                             ema.copy_to(model.parameters())
                             sample_random_image_batch(snapshot_sampling_shape, sampler, os.path.join(
-                                sample_dir, 'iter_%d' % state['step']), self.device, self.private_num_classes)
+                                sample_dir, 'iter_%d' % state['step']), self.device, self.private_num_classes, noise=self.generate_noise)
                             ema.restore(model.parameters())
                         model.train()
 
@@ -1328,7 +1327,7 @@ class PE_Diffusion(DPSynther):
                         with torch.no_grad():
                             ema.store(model.parameters())
                             ema.copy_to(model.parameters())
-                            fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, self.inception_model, self.fid_stats, self.device, self.private_num_classes)
+                            fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, self.inception_model, self.fid_stats, self.device, self.private_num_classes, noise=self.generate_noise)
                             ema.restore(model.parameters())
 
                             if self.global_rank == 0:
@@ -1356,7 +1355,7 @@ class PE_Diffusion(DPSynther):
 
                     # Perform a forward pass and backpropagation.
                     optimizer.zero_grad(set_to_none=True)
-                    loss = torch.mean(loss_fn(model, x, y))
+                    loss = torch.mean(loss_fn(model, x, y, noise=self.generate_noise))
                     loss.backward()
                     optimizer.step()
 
@@ -1458,7 +1457,7 @@ class PE_Diffusion(DPSynther):
         # Loop to generate the required number of samples
         for _ in range(config.data_num // (sampling_shape[0] * self.global_size) + 1):
             # Generate a batch of samples and labels
-            x, y = generate_batch(sampler_acc, sampling_shape, self.device, self.private_num_classes, self.private_num_classes)
+            x, y = generate_batch(sampler_acc, sampling_shape, self.device, self.private_num_classes, self.private_num_classes, noise=self.generate_noise)
             
             # Synchronize all processes
             dist.barrier()

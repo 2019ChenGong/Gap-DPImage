@@ -107,7 +107,12 @@ def sample_batch(sample_dir, counter, max_samples, sampling_fn, sampling_shape, 
     return counter, labels
 
 def generate_batch(sampling_fn, sampling_shape, device, labels, n_classes, noise=None, yy=None):
-    x = torch.randn(sampling_shape, device=device) if noise is None else noise.to(device)
+    if noise is None:
+        x = torch.randn(sampling_shape, device=device)
+    else:
+        indices = torch.randperm(noise.size(0))[:sampling_shape[0]]
+        x = noise[indices].to(device)
+    # x = torch.randn(sampling_shape, device=device) if noise is None else noise.to(device)
     with torch.no_grad():
         if labels is None:
             if n_classes is not None:

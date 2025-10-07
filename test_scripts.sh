@@ -25,3 +25,6 @@ python run.py setup.n_gpus_per_node=3 --method PE-SGD --data_name mnist_28 --eps
 
 # variation
 python run.py setup.n_gpus_per_node=4 --method PE-SGD --data_name mnist_28 --epsilon 10.0 eval.mode=val pretrain.mode=time_freq train.pe_variation=true
+
+# Noise fixed-SGD   
+python run.py setup.n_gpus_per_node=3 --method Noise-SGD --data_name mnist_28 --epsilon 10.0 eval.mode=val pretrain.mode=time_freq model.noise_num=60000 train.pe_freq=[]

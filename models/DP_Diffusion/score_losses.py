@@ -145,7 +145,7 @@ class EDMLoss:
         self.label_unconditioning_prob = label_unconditioning_prob
         self.n_classes = n_classes
 
-    def get_loss(self, model, x, y):
+    def get_loss(self, model, x, y, noise=None):
         y = dropout_label_for_cfg_training(
             y, self.n_noise_samples, self.n_classes, self.label_unconditioning_prob, x.device)
 
@@ -158,8 +158,13 @@ class EDMLoss:
         sigma = add_dimensions(sigma, len(x.shape) - 1)
         x_repeated = x.unsqueeze(1).repeat_interleave(
             self.n_noise_samples, dim=1)
-        x_noisy = x_repeated + sigma * \
-            torch.randn_like(x_repeated, device=x.device)
+        if noise is None:
+            x_noisy = x_repeated + sigma * \
+                torch.randn_like(x_repeated, device=x.device)
+        else:
+            indices = torch.randperm(noise.size(0))[:x_repeated.shape[0]*x_repeated.shape[1]]
+            e = noise[indices].to(x.device).reshape(*x_repeated.shape)
+            x_noisy = x_repeated + sigma * e
 
         w = (sigma ** 2. + self.sigma_data ** 2.) / \
             (sigma * self.sigma_data) ** 2.
