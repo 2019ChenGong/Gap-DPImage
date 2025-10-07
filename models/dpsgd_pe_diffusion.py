@@ -56,10 +56,7 @@ def print_dimensions_and_range(top_x, top_y, global_rank=0):
     """
     # 只在主进程（rank 0）中打印，避免分布式训练中的重复输出
     if global_rank != 0:
-        return
-        
-    import traceback
-    
+        return    
 
     
     # Dimensions and range for top_x
@@ -102,6 +99,18 @@ def augment_data(images, labels, aug_factor=8, magnitude=9, num_ops=2):
         torch.Tensor: Augmented images [N * aug_factor, C, H, W].
         torch.Tensor: Augmented labels [N * aug_factor].
     """
+    # 确保输入是torch tensor
+    if not isinstance(images, torch.Tensor):
+        images = torch.tensor(images)
+    if not isinstance(labels, torch.Tensor):
+        labels = torch.tensor(labels)
+    
+    # 确保images在正确的设备上
+    if images.is_cuda:
+        images = images.cpu()
+    if labels.is_cuda:
+        labels = labels.cpu()
+    
     N, C, H, W = images.shape
     augmented_images = []
     augmented_labels = []
@@ -112,14 +121,25 @@ def augment_data(images, labels, aug_factor=8, magnitude=9, num_ops=2):
         aug_batch = []
         for i in range(N):
             # Convert tensor to numpy array (assuming [0, 1] float)
-            img_np = (images[i].cpu().permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            img_np = (images[i].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            
+            # 确保图像形状正确
+            if len(img_np.shape) == 2:  # 灰度图像
+                img_np = np.expand_dims(img_np, axis=2)
             
             # Handle grayscale to RGB if C==1
-            if C == 1:
-                img_np = np.repeat(img_np[:, :, np.newaxis], 3, axis=2)
+            if C == 1 and img_np.shape[2] == 1:
+                img_np = np.repeat(img_np, 3, axis=2)
+            
+            # 确保图像是2D或3D的
+            if len(img_np.shape) == 3 and img_np.shape[2] == 1:
+                img_np = img_np.squeeze(axis=2)
             
             # Convert to PIL Image
-            pil_img = Image.fromarray(img_np)
+            if len(img_np.shape) == 2:  # 灰度图像
+                pil_img = Image.fromarray(img_np, mode='L')
+            else:  # RGB图像
+                pil_img = Image.fromarray(img_np, mode='RGB')
             
             # Apply augmentation
             aug_pil = trans(pil_img)
@@ -129,10 +149,17 @@ def augment_data(images, labels, aug_factor=8, magnitude=9, num_ops=2):
             
             # Handle back to grayscale if original C==1
             if C == 1:
-                aug_np = np.mean(aug_np, axis=2, keepdims=True)
+                if len(aug_np.shape) == 3:
+                    aug_np = np.mean(aug_np, axis=2, keepdims=True)
+                else:
+                    aug_np = np.expand_dims(aug_np, axis=2)
             
             # Convert to tensor [C, H, W]
-            aug_tensor = torch.from_numpy(aug_np).permute(2, 0, 1).float()
+            if len(aug_np.shape) == 2:  # 灰度图像
+                aug_tensor = torch.from_numpy(aug_np).unsqueeze(0).float()  # [1, H, W]
+            else:  # RGB图像
+                aug_tensor = torch.from_numpy(aug_np).permute(2, 0, 1).float()  # [C, H, W]
+            
             aug_batch.append(aug_tensor)
         
         aug_batch = torch.stack(aug_batch)  # [N, C, H, W]
@@ -1244,8 +1271,12 @@ class PE_Diffusion(DPSynther):
                     for cls in range(self.private_num_classes):
                         # 修复NumPy数组的布尔索引问题
                         mask = (top_y == cls)
-                        if np.any(mask):
-                            show_images.append(top_x[mask][:8])
+                        if torch.any(mask) if isinstance(mask, torch.Tensor) else np.any(mask):
+                            selected_images = top_x[mask][:8]
+                            # 确保转换为numpy数组
+                            if isinstance(selected_images, torch.Tensor):
+                                selected_images = selected_images.cpu().numpy()
+                            show_images.append(selected_images)
                     if show_images:
                         show_images = np.concatenate(show_images)
                         torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'top_sample.png'), padding=1, nrow=8)
@@ -1254,8 +1285,12 @@ class PE_Diffusion(DPSynther):
                     for cls in range(self.private_num_classes):
                         # 修复NumPy数组的布尔索引问题
                         mask = (bottem_y == cls)
-                        if np.any(mask):
-                            show_images.append(bottem_x[mask][:8])
+                        if torch.any(mask) if isinstance(mask, torch.Tensor) else np.any(mask):
+                            selected_images = bottem_x[mask][:8]
+                            # 确保转换为numpy数组
+                            if isinstance(selected_images, torch.Tensor):
+                                selected_images = selected_images.cpu().numpy()
+                            show_images.append(selected_images)
                     if show_images:
                         show_images = np.concatenate(show_images)
                         torchvision.utils.save_image(torch.from_numpy(show_images), os.path.join(self.all_config.pretrain.log_dir, "samples", 'bottom_sample.png'), padding=1, nrow=8)
