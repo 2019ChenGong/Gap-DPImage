@@ -975,7 +975,7 @@ class PE_Diffusion(DPSynther):
         top_indices = np.concatenate(top_indices)
         if self.global_rank == 0:
             logging.info(f"Before unique - top_indices length: {len(top_indices)}")
-        # 去重，避免重复选择同一个样本
+
         top_indices = np.unique(top_indices)
         if self.global_rank == 0:
             logging.info(f"After unique - top_indices length: {len(top_indices)}")
@@ -1008,24 +1008,112 @@ class PE_Diffusion(DPSynther):
 
     def constractive_learning(self, top_x, top_y, bottom_x, bottom_y, epoch, config):
 
-        if 'contrastive' in config and config['contrastive']:
-            top_labels = np.ones_like(top_y)
-            bottom_labels = np.zeros_like(bottom_y)
-            x = np.concatenate([top_x, bottom_x])
-            y = np.concatenate([top_y, bottom_y])
-            label = np.concatenate([top_labels, bottom_labels])
-            contrastive_dataset = TensorDataset(torch.tensor(x).float(), torch.tensor(y).long(), torch.tensor(label).long())
+        if self.global_rank == 0:
+            logging.info(f"Starting constractive_learning with top_x shape: {top_x.shape}")
+        
+        # Step 1: Generate variants of top_x to reach model.noise_num
+        current_top_count = len(top_x)
+        target_count = self.all_config.model.noise_num
+        variants_needed = max(0, target_count - current_top_count)
+        
+        if variants_needed > 0:
+            if self.global_rank == 0:
+                logging.info(f"Generating {variants_needed} variants using _image_variation")
+            
+            # Generate variants using _image_variation
+            # We need to repeat top_x to get enough samples for variation
+            repeat_factor = (variants_needed // current_top_count) + 1
+            repeated_top_x = np.tile(top_x, (repeat_factor, 1, 1, 1))
+            repeated_top_y = np.tile(top_y, (repeat_factor,))
+            
+            # Create a sampler function for _image_variation
+            # This sampler will use the diffusion model to generate variations
+            def variation_sampler(x, y, start_sigma=None):
+                # Convert to the right format for the diffusion model
+                x = x * 2.0 - 1.0  # Convert from [0,1] to [-1,1]
+                
+                # Use the diffusion model to generate variations
+                # We'll use a simple approach: add noise and then denoise
+                with torch.no_grad():
+                    # Add some noise to create variation
+                    # Use config parameter to control noise strength
+                    variant_noise_scale = getattr(config, 'variant_noise', 0.1)
+                    if self.global_rank == 0:
+                        logging.info(f"Using variant_noise_scale: {variant_noise_scale}")
+                    noise = torch.randn_like(x) * variant_noise_scale
+                    noisy_x = x + noise
+                    
+                    # Use the diffusion model to denoise (this creates a variation)
+                    # For simplicity, we'll just return the noisy version
+                    # In practice, you might want to use the actual diffusion sampling process
+                    return noisy_x
+            
+            # Use _image_variation to generate variants
+            variant_images = self._image_variation(
+                torch.from_numpy(repeated_top_x).float(), 
+                repeated_top_y, 
+                variation_degree=0.1, 
+                sampler=variation_sampler, 
+                batch_size=100
+            )
+            
+            # Convert back to numpy and select the needed amount
+            variant_images = variant_images.numpy()
+            variant_labels = repeated_top_y[:len(variant_images)]
+            
+            # Select exactly the number we need
+            variant_images = variant_images[:variants_needed]
+            variant_labels = variant_labels[:variants_needed]
+            
+            # Combine original top_x with variants
+            combined_top_x = np.concatenate([top_x, variant_images], axis=0)
+            combined_top_y = np.concatenate([top_y, variant_labels], axis=0)
+            
+            if self.global_rank == 0:
+                logging.info(f"Combined top images shape: {combined_top_x.shape}")
         else:
-            contrastive_dataset = TensorDataset(torch.tensor(top_x).float(), torch.tensor(top_y).long())
-        contrastive_dataloader = DataLoader(contrastive_dataset)
-        if 'contrastive' in self.all_config.pretrain.log_dir[-15:]:
-            self.all_config.pretrain.log_dir = '_'.join(self.all_config.pretrain.log_dir.split('_')[:-1]) + '_{}'.format(epoch)
+            combined_top_x = top_x
+            combined_top_y = top_y
+        
+        # Step 2: Convert images to initial noise using diffusion forward process
+        if self.global_rank == 0:
+            logging.info("Converting images to initial noise using diffusion forward process")
+        
+        # Convert images to the right format (0-1 range to -1 to 1 range)
+        images_tensor = torch.from_numpy(combined_top_x).float()
+        images_tensor = images_tensor * 2.0 - 1.0  # Convert from [0,1] to [-1,1]
+        images_tensor = images_tensor.to(self.device)
+        
+        # Generate initial noise by adding noise at maximum timestep
+        max_timestep = self._diffusion.num_timesteps - 1
+        t_tensor = torch.full((len(images_tensor),), max_timestep, device=self.device, dtype=torch.long)
+        
+        # Generate random noise
+        noise = torch.randn_like(images_tensor)
+        
+        # Apply forward diffusion process to get noisy images at max timestep
+        noisy_images = self._diffusion.q_sample(images_tensor, t_tensor, noise=noise)
+        
+        # The noisy images at max timestep are essentially the "initial noise" we want
+        initial_noise = noisy_images.detach().cpu()
+        
+        # Step 3: Replace the original generate_noise with our computed initial noise
+        if self.global_rank == 0:
+            logging.info(f"Replacing generate_noise with computed initial noise, shape: {initial_noise.shape}")
+        
+        # Ensure we have the right shape
+        if initial_noise.shape[0] >= target_count:
+            self.generate_noise = initial_noise[:target_count]
         else:
-            self.all_config.pretrain.log_dir = self.all_config.pretrain.log_dir + '_contrastive_{}'.format(epoch)
-        self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
-        self.all_config.pretrain.batch_size = config.contrastive_batch_size
+            # If we don't have enough, pad with random noise
+            padding_needed = target_count - initial_noise.shape[0]
+            padding_noise = torch.randn(padding_needed, *initial_noise.shape[1:])
+            self.generate_noise = torch.cat([initial_noise, padding_noise], dim=0)
+        
+        if self.global_rank == 0:
+            logging.info(f"Final generate_noise shape: {self.generate_noise.shape}")
+            logging.info("Completed - noise replacement done")
 
-        self.pe_pretrain(contrastive_dataloader, self.all_config.pretrain)
         torch.cuda.empty_cache()
 
 
@@ -1273,11 +1361,11 @@ class PE_Diffusion(DPSynther):
 
                     show_images = []
                     for cls in range(self.private_num_classes):
-                        # 修复NumPy数组的布尔索引问题
+                        
                         mask = (top_y == cls)
                         if torch.any(mask) if isinstance(mask, torch.Tensor) else np.any(mask):
                             selected_images = top_x[mask][:8]
-                            # 确保转换为numpy数组
+
                             if isinstance(selected_images, torch.Tensor):
                                 selected_images = selected_images.cpu().numpy()
                             show_images.append(selected_images)
@@ -1287,11 +1375,11 @@ class PE_Diffusion(DPSynther):
 
                     show_images = []
                     for cls in range(self.private_num_classes):
-                        # 修复NumPy数组的布尔索引问题
+                        
                         mask = (bottem_y == cls)
                         if torch.any(mask) if isinstance(mask, torch.Tensor) else np.any(mask):
                             selected_images = bottem_x[mask][:8]
-                            # 确保转换为numpy数组
+                            
                             if isinstance(selected_images, torch.Tensor):
                                 selected_images = selected_images.cpu().numpy()
                             show_images.append(selected_images)

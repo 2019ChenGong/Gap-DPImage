@@ -109,7 +109,7 @@ pretrain:
     optimizer: Adam
     params:
       lr: 3e-4
-      weight_decay: 1e-4
+      weight_decay: 0.0
   loss:
     version: edm
     p_mean: -1.2
