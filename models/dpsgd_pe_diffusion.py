@@ -977,7 +977,7 @@ class PE_Diffusion(DPSynther):
         top_indices = np.concatenate(top_indices)
         if self.global_rank == 0:
             logging.info(f"Before unique - top_indices length: {len(top_indices)}")
-        # 去重，避免重复选择同一个样本
+
         top_indices = np.unique(top_indices)
         if self.global_rank == 0:
             logging.info(f"After unique - top_indices length: {len(top_indices)}")
@@ -989,7 +989,7 @@ class PE_Diffusion(DPSynther):
         bottom_indices = np.concatenate(bottom_indices)
         if self.global_rank == 0:
             logging.info(f"Before unique - bottom_indices length: {len(bottom_indices)}")
-        # 去重，避免重复选择同一个样本
+
         bottom_indices = np.unique(bottom_indices)
         if self.global_rank == 0:
             logging.info(f"After unique - bottom_indices length: {len(bottom_indices)}")
@@ -1221,18 +1221,24 @@ class PE_Diffusion(DPSynther):
                 
                 pe_variation_enabled = hasattr(config, 'pe_variation') and config.pe_variation
                 sampler_to_use = sampler if pe_variation_enabled else None
+                
                 if self.global_rank == 0:
                     logging.info(f"pe_variation enabled: {pe_variation_enabled}, sampler_to_use: {sampler_to_use is not None}")
                 
                 torch.manual_seed(42)
                 np.random.seed(42)
                 
-                # 所有进程都执行pe_vote，但由于相同的随机种子，结果应该一致
                 top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler_to_use)
 
                 print_dimensions_and_range(top_x, top_y, self.global_rank)
 
-                top_x, top_y = augment_data(top_x, top_y, aug_factor=8, magnitude=9, num_ops=2)
+                # Data augmentation control
+                argu_enabled = getattr(config, 'argu', False)
+                if self.global_rank == 0:
+                    logging.info(f"Data augmentation enabled: {argu_enabled}")
+                
+                if argu_enabled:
+                    top_x, top_y = augment_data(top_x, top_y, aug_factor=8, magnitude=9, num_ops=2)
 
                 print_dimensions_and_range(top_x, top_y, self.global_rank)
                 
@@ -1371,8 +1377,9 @@ class PE_Diffusion(DPSynther):
                         state['ema'].update(model.parameters())
 
                 # Log the epsilon value after each epoch.
-                logging.info('Eps-value after %d epochs: %.4f' %
-                            (epoch + 1, privacy_engine.get_epsilon(config.dp.delta)))
+                if self.global_rank == 0:
+                    logging.info('Eps-value after %d epochs: %.4f' %
+                                (epoch + 1, privacy_engine.get_epsilon(config.dp.delta)))
 
         if self.global_rank == 0:
             # Save the final checkpoint.

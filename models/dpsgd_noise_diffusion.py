@@ -54,7 +54,6 @@ def print_dimensions_and_range(top_x, top_y, global_rank=0):
         top_x (torch.Tensor): The tensor for images or features.
         top_y (torch.Tensor | np.ndarray): The tensor/array for labels.
     """
-    # 只在主进程（rank 0）中打印，避免分布式训练中的重复输出
     if global_rank != 0:
         return    
 
@@ -1231,7 +1230,13 @@ class PE_Diffusion(DPSynther):
 
                 print_dimensions_and_range(top_x, top_y, self.global_rank)
 
-                top_x, top_y = augment_data(top_x, top_y, aug_factor=8, magnitude=9, num_ops=2)
+                # Data augmentation control
+                argu_enabled = getattr(config, 'argu', False)
+                if self.global_rank == 0:
+                    logging.info(f"Data augmentation enabled: {argu_enabled}")
+                
+                if argu_enabled:
+                    top_x, top_y = augment_data(top_x, top_y, aug_factor=8, magnitude=9, num_ops=2)
 
                 print_dimensions_and_range(top_x, top_y, self.global_rank)
                 
