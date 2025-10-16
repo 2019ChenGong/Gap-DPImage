@@ -1209,8 +1209,15 @@ class PE_Diffusion(DPSynther):
                 # 确保所有进程使用相同的随机种子来生成样本
                 torch.manual_seed(42)
                 np.random.seed(42)
-                
-                gen_x, gen_y = generate_batch(sampler, (config.contrastive_num_samples, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
+                gen_x = []
+                gen_y = []
+                pe_batch_size = 500
+                for _ in range(config.contrastive_num_samples//self.global_size//pe_batch_size+1):
+                    gen_x_i, gen_y_i = generate_batch(sampler, (pe_batch_size, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes, noise=self.generate_noise)
+                    gen_x.append(gen_x_i)
+                    gen_y.append(gen_y_i)
+                gen_x = torch.cat(gen_x)[:config.contrastive_num_samples]
+                gen_y = torch.cat(gen_y)[:config.contrastive_num_samples]
 
                 # combine
                 images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])

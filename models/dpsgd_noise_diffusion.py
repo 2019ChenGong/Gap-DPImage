@@ -295,7 +295,7 @@ class PE_Diffusion(DPSynther):
             del state, new_state_dict  # Clean up memory
 
         self.is_pretrain = True  # Flag to indicate pretraining status
-        self.generate_noise = torch.randn((config.noise_num, self.network.num_in_channels, self.network.image_size, self.network.image_size))
+        self.generate_noise = torch.randn((config.noise_num//self.global_size, self.network.num_in_channels, self.network.image_size, self.network.image_size))
 
     def pretrain(self, public_dataloader, config):
         """
@@ -839,7 +839,7 @@ class PE_Diffusion(DPSynther):
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
                         sample_random_image_batch(snapshot_sampling_shape, sampler, os.path.join(
-                            sample_dir, 'iter_%d' % state['step']), self.device, self.private_num_classes)
+                            sample_dir, 'iter_%d' % state['step']), self.device, self.private_num_classes, noise=self.generate_noise)
                         ema.restore(model.parameters())
                     model.train()
 
@@ -873,7 +873,7 @@ class PE_Diffusion(DPSynther):
                 # Prepare the input data for training.
                 train_x, train_y = train_x.to(self.device) * 2. - 1., train_y.to(self.device)
                 optimizer.zero_grad(set_to_none=True)
-                loss = loss_fn(model, train_x, train_y)
+                loss = loss_fn(model, train_x, train_y, noise=self.generate_noise)
                 if label is not None:
                     label = label.to(self.device)
                     if self.all_config.train.contrastive == 'v1':
@@ -900,7 +900,7 @@ class PE_Diffusion(DPSynther):
             with torch.no_grad():
                 ema.store(model.parameters())
                 ema.copy_to(model.parameters())
-                fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes, noise=self.generate_noise)
                 ema.restore(model.parameters())
 
                 if self.global_rank == 0:
@@ -1296,7 +1296,15 @@ class PE_Diffusion(DPSynther):
                 torch.manual_seed(42)
                 np.random.seed(42)
                 
-                gen_x, gen_y = generate_batch(sampler, (config.contrastive_num_samples, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes)
+                gen_x = []
+                gen_y = []
+                pe_batch_size = 500
+                for _ in range(config.contrastive_num_samples//self.global_size//pe_batch_size+1):
+                    gen_x_i, gen_y_i = generate_batch(sampler, (pe_batch_size, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes, noise=self.generate_noise)
+                    gen_x.append(gen_x_i)
+                    gen_y.append(gen_y_i)
+                gen_x = torch.cat(gen_x)[:config.contrastive_num_samples]
+                gen_y = torch.cat(gen_y)[:config.contrastive_num_samples]
 
                 # combine
                 images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])

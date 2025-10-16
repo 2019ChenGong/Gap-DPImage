@@ -1,5 +1,5 @@
 setup:
-  method: dp-pe
+  method: dp-noise
   run_type: torchmp
   n_gpus_per_node: 3
   n_nodes: 1
@@ -54,7 +54,7 @@ model:
     snapshot_batch_size: 80
     fid_batch_size: 256
   sampler_fid:
-    type: edm
+    type: ddim
     s_churn: 100
     s_min: 0.05
     s_max: 50
@@ -64,7 +64,7 @@ model:
     rho: 7.0
     guid_scale: 0.0
   sampler_acc:
-    type: edm
+    type: ddim
     s_churn: 10
     s_min: 0.1
     s_max: 50
