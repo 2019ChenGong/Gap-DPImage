@@ -722,7 +722,7 @@ class PE_Diffusion(DPSynther):
         torch.cuda.empty_cache()
         return config
 
-    def pe_pretrain(self, public_dataloader, config):
+    def pe_pretrain(self, public_dataloader, config, start_optimizer=None):
         if public_dataloader is None or config.n_epochs == 0:
             # If no public dataloader is provided, set pretraining flag to False and return.
             self.is_pretrain = False
@@ -762,6 +762,9 @@ class PE_Diffusion(DPSynther):
             optimizer = torch.optim.SGD(model.parameters(), **config.optim.params)
         else:
             raise NotImplementedError("Optimizer not supported")
+        
+        if start_optimizer is not None:
+            optimizer.load_state_dict(start_optimizer.state_dict())
 
         # Initialize the training state.
         state = dict(model=model, ema=ema, optimizer=optimizer, step=0)

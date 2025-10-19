@@ -724,7 +724,7 @@ class PE_Diffusion(DPSynther):
         torch.cuda.empty_cache()
         return config
 
-    def pe_pretrain(self, public_dataloader, config):
+    def pe_pretrain(self, public_dataloader, config, start_optimizer=None):
         if public_dataloader is None or config.n_epochs == 0:
             # If no public dataloader is provided, set pretraining flag to False and return.
             self.is_pretrain = False
@@ -764,6 +764,9 @@ class PE_Diffusion(DPSynther):
             optimizer = torch.optim.SGD(model.parameters(), **config.optim.params)
         else:
             raise NotImplementedError("Optimizer not supported")
+        
+        if start_optimizer is not None:
+            optimizer.load_state_dict(start_optimizer.state_dict())
 
         # Initialize the training state.
         state = dict(model=model, ema=ema, optimizer=optimizer, step=0)
@@ -827,10 +830,10 @@ class PE_Diffusion(DPSynther):
             for _, batch in enumerate(dataset_loader):
 
                 if len(batch) == 2:
-                    train_x, train_y = batch
+                    train_x, train_y = (batch)
                     label = None
                 else:
-                    train_x, train_y, label = batch
+                    train_x, train_y, label = (batch)
 
                 # Save snapshots and checkpoints at specified intervals.
                 if state['step'] % config.snapshot_freq == 0 and state['step'] >= config.snapshot_threshold and self.global_rank == 0:
@@ -847,22 +850,6 @@ class PE_Diffusion(DPSynther):
 
                     save_checkpoint(os.path.join(checkpoint_dir, 'snapshot_checkpoint.pth'), state)
                 dist.barrier()
-
-                # Compute FID at specified intervals.
-                # if state['step'] % config.fid_freq == 0 and state['step'] >= config.fid_threshold:
-                #     model.eval()
-                #     with torch.no_grad():
-                #         ema.store(model.parameters())
-                #         ema.copy_to(model.parameters())
-                #         fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
-                #         ema.restore(model.parameters())
-
-                #         if self.global_rank == 0:
-                #             logging.info('FID at iteration %d: %.6f' % (state['step'], fid))
-                #     model.train()
-                # dist.barrier()
-
-                # Compute FID at each epoch.
 
                 # Save checkpoints at specified intervals.
                 if state['step'] % config.save_freq == 0 and state['step'] >= config.save_threshold and self.global_rank == 0:
@@ -888,6 +875,10 @@ class PE_Diffusion(DPSynther):
                     loss = loss.mean()
                 loss.backward()
                 optimizer.step()
+
+                for param in model.parameters():
+                    if hasattr(param, "grad_sample"):
+                        param.grad_sample = None
 
                 # Log the loss at specified intervals.
                 if (state['step'] + 1) % config.log_freq == 0 and self.global_rank == 0:
@@ -1008,7 +999,7 @@ class PE_Diffusion(DPSynther):
 
         return top_images, top_labels, bottom_images, bottom_labels
 
-    def constractive_learning(self, top_x, top_y, bottom_x, bottom_y, epoch, config):
+    def constractive_learning(self, top_x, top_y, bottom_x, bottom_y, epoch, config, start_optimizer=None):
 
         if 'contrastive' in config and config['contrastive']:
             top_labels = np.ones_like(top_y)
@@ -1027,7 +1018,7 @@ class PE_Diffusion(DPSynther):
         self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
         self.all_config.pretrain.batch_size = config.contrastive_batch_size
 
-        self.pe_pretrain(contrastive_dataloader, self.all_config.pretrain)
+        self.pe_pretrain(contrastive_dataloader, self.all_config.pretrain, start_optimizer=start_optimizer)
         torch.cuda.empty_cache()
 
 
@@ -1196,7 +1187,8 @@ class PE_Diffusion(DPSynther):
             pe_lock = True
             
             # PE training at epoch level (not batch level)
-            if epoch in pe_freq and pe_lock:
+            if epoch in pe_freq and pe_lock and not optimizer._is_last_step_skipped:
+                torch.cuda.empty_cache()
                 # PE training
                 """
                 Key hyper-parameter:
@@ -1206,18 +1198,47 @@ class PE_Diffusion(DPSynther):
                 if self.global_rank == 0:
                     logging.info("PE training start!")
 
-                # 确保所有进程使用相同的随机种子来生成样本
-                torch.manual_seed(42)
-                np.random.seed(42)
+                # Each GPU generates part of the samples in parallel for faster generation
+                # Set different seed for each rank to get diverse samples
+                torch.manual_seed(42 + self.global_rank)
+                np.random.seed(42 + self.global_rank)
+                
+                # Each GPU generates contrastive_num_samples // global_size samples
+                samples_per_gpu = config.contrastive_num_samples // self.global_size
                 gen_x = []
                 gen_y = []
                 pe_batch_size = 500
-                for _ in range(config.contrastive_num_samples//self.global_size//pe_batch_size+1):
+                num_iterations = samples_per_gpu // pe_batch_size + 1
+                
+                if self.global_rank == 0:
+                    logging.info(f"Each of {self.global_size} GPUs will generate {samples_per_gpu} samples")
+                
+                for _ in range(num_iterations):
                     gen_x_i, gen_y_i = generate_batch(sampler, (pe_batch_size, self.network.num_in_channels, self.network.image_size, self.network.image_size), self.device, self.private_num_classes, self.private_num_classes, noise=self.generate_noise)
                     gen_x.append(gen_x_i)
                     gen_y.append(gen_y_i)
-                gen_x = torch.cat(gen_x)[:config.contrastive_num_samples]
-                gen_y = torch.cat(gen_y)[:config.contrastive_num_samples]
+                gen_x = torch.cat(gen_x)[:samples_per_gpu].to(self.device)
+                gen_y = torch.cat(gen_y)[:samples_per_gpu].to(self.device)
+                
+                if self.global_rank == 0:
+                    logging.info(f"GPU {self.global_rank} generated {len(gen_x)} samples")
+                
+                # Gather samples from all GPUs
+                if self.global_size > 1:
+                    # Create lists to hold gathered tensors
+                    gen_x_list = [torch.zeros_like(gen_x) for _ in range(self.global_size)]
+                    gen_y_list = [torch.zeros_like(gen_y) for _ in range(self.global_size)]
+                    
+                    # Gather tensors from all ranks
+                    dist.all_gather(gen_x_list, gen_x)
+                    dist.all_gather(gen_y_list, gen_y)
+                    
+                    # Concatenate all gathered samples
+                    gen_x = torch.cat(gen_x_list, dim=0)
+                    gen_y = torch.cat(gen_y_list, dim=0)
+                    
+                    if self.global_rank == 0:
+                        logging.info(f"Gathered and merged samples from all GPUs: total {len(gen_x)} samples")
 
                 # combine
                 images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
@@ -1248,6 +1269,44 @@ class PE_Diffusion(DPSynther):
                     top_x, top_y = augment_data(top_x, top_y, aug_factor=8, magnitude=9, num_ops=2)
 
                 print_dimensions_and_range(top_x, top_y, self.global_rank)
+
+                # Check if real_data_contrastive is enabled (handle both boolean and string)
+                real_data_enabled = getattr(config, 'real_data_contrastive', False)
+                if isinstance(real_data_enabled, str):
+                    real_data_enabled = real_data_enabled.lower() in ['true', '1', 'yes']
+                
+                if real_data_enabled:
+                    if self.global_rank == 0:
+                        logging.info("Replacing with real data samples from sensitive_dataloader")
+                    print("Replacing with real data samples from sensitive_dataloader")
+                    # Sample data from sensitive_dataloader with the same size as top_x, top_y
+                    num_samples = len(top_x)
+                    dataset = sensitive_dataloader.dataset
+                    
+                    # Randomly sample indices
+                    total_samples = len(dataset)
+                    sampled_indices = torch.randperm(total_samples)[:num_samples]
+                    
+                    # Extract sampled data from dataset
+                    sampled_x = []
+                    sampled_y = []
+                    for idx in sampled_indices:
+                        x, y = dataset[idx]
+                        # Convert to tensor if it's a numpy array
+                        if isinstance(x, np.ndarray):
+                            x = torch.from_numpy(x)
+                        sampled_x.append(x)
+                        sampled_y.append(y)
+                    
+                    # Convert to the same format as top_x, top_y
+                    top_x = torch.stack(sampled_x)
+                    if isinstance(top_y, np.ndarray):
+                        top_y = np.array(sampled_y)
+                    else:
+                        top_y = torch.tensor(sampled_y)
+                    
+                    if self.global_rank == 0:
+                        logging.info(f"Replaced with {num_samples} real data samples from sensitive_dataloader")
                 
                 fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
                 fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
@@ -1258,7 +1317,9 @@ class PE_Diffusion(DPSynther):
 
                 # constractiving learning
                 torch.cuda.empty_cache()
-                self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config)
+
+
+                self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config, start_optimizer=optimizer.original_optimizer if 'optimizer_reuse' in config and config['optimizer_reuse'] else None)
 
                 if self.global_rank == 0:
                     indices = torch.randperm(images_to_select.size(0))
@@ -1282,11 +1343,9 @@ class PE_Diffusion(DPSynther):
 
                     show_images = []
                     for cls in range(self.private_num_classes):
-                        # 修复NumPy数组的布尔索引问题
                         mask = (top_y == cls)
                         if torch.any(mask) if isinstance(mask, torch.Tensor) else np.any(mask):
                             selected_images = top_x[mask][:8]
-                            # 确保转换为numpy数组
                             if isinstance(selected_images, torch.Tensor):
                                 selected_images = selected_images.cpu().numpy()
                             show_images.append(selected_images)
@@ -1296,11 +1355,9 @@ class PE_Diffusion(DPSynther):
 
                     show_images = []
                     for cls in range(self.private_num_classes):
-                        # 修复NumPy数组的布尔索引问题
                         mask = (bottem_y == cls)
                         if torch.any(mask) if isinstance(mask, torch.Tensor) else np.any(mask):
                             selected_images = bottem_x[mask][:8]
-                            # 确保转换为numpy数组
                             if isinstance(selected_images, torch.Tensor):
                                 selected_images = selected_images.cpu().numpy()
                             show_images.append(selected_images)
