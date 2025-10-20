@@ -830,10 +830,10 @@ class PE_Diffusion(DPSynther):
             for _, batch in enumerate(dataset_loader):
 
                 if len(batch) == 2:
-                    train_x, train_y = (batch)
+                    train_x, train_y = batch
                     label = None
                 else:
-                    train_x, train_y, label = (batch)
+                    train_x, train_y, label = batch
 
                 # Save snapshots and checkpoints at specified intervals.
                 if state['step'] % config.snapshot_freq == 0 and state['step'] >= config.snapshot_threshold and self.global_rank == 0:
@@ -891,13 +891,16 @@ class PE_Diffusion(DPSynther):
             # Compute FID at each epoch.
             model.eval()
             with torch.no_grad():
-                # ema.store(model.parameters())
-                # ema.copy_to(model.parameters())
+                # Use EMA weights for better generation quality
+                ema.store(model.parameters())
+                ema.copy_to(model.parameters())
                 fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
-                # ema.restore(model.parameters())
+                fid_with_finetuned_data = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes, cache_mean=self.top_fid_mean, cache_sigma=self.top_fid_sigma)
+                ema.restore(model.parameters())
 
                 if self.global_rank == 0:
-                    logging.info('FID at epoch %d: %.6f' % (epoch + 1, fid))
+                    logging.info('FID at epoch %d: %.6f (using EMA weights for generation)' % (epoch + 1, fid))
+                    logging.info('FID with finetuned data at epoch %d: %.6f (using EMA weights for generation)' % (epoch + 1, fid_with_finetuned_data))
             model.train()
             dist.barrier()
             
@@ -1187,8 +1190,7 @@ class PE_Diffusion(DPSynther):
             pe_lock = True
             
             # PE training at epoch level (not batch level)
-            if epoch in pe_freq and pe_lock and not optimizer._is_last_step_skipped:
-                torch.cuda.empty_cache()
+            if epoch in pe_freq and pe_lock:
                 # PE training
                 """
                 Key hyper-parameter:
@@ -1245,7 +1247,7 @@ class PE_Diffusion(DPSynther):
                 label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
                 image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
 
-                fid_before_selection = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                fid_before_selection, _, _ = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
                 
                 pe_variation_enabled = hasattr(config, 'pe_variation') and config.pe_variation
                 sampler_to_use = sampler if pe_variation_enabled else None
@@ -1270,6 +1272,13 @@ class PE_Diffusion(DPSynther):
 
                 print_dimensions_and_range(top_x, top_y, self.global_rank)
 
+                # Compute FID for synthetic top samples BEFORE replacement
+                fid_top_synthetic, self.top_fid_mean, self.top_fid_sigma = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                fid_bottom, _, _ = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                
+                if self.global_rank == 0:
+                    logging.info(f"FID of synthetic top samples (before replacement): {fid_top_synthetic}")
+                
                 # Check if real_data_contrastive is enabled (handle both boolean and string)
                 real_data_enabled = getattr(config, 'real_data_contrastive', False)
                 if isinstance(real_data_enabled, str):
@@ -1277,8 +1286,8 @@ class PE_Diffusion(DPSynther):
                 
                 if real_data_enabled:
                     if self.global_rank == 0:
-                        logging.info("Replacing with real data samples from sensitive_dataloader")
-                    print("Replacing with real data samples from sensitive_dataloader")
+                        logging.info("Replacing synthetic samples with real data samples from sensitive_dataloader")
+                    print("Replacing synthetic samples with real data samples from sensitive_dataloader")
                     # Sample data from sensitive_dataloader with the same size as top_x, top_y
                     num_samples = len(top_x)
                     dataset = sensitive_dataloader.dataset
@@ -1308,8 +1317,8 @@ class PE_Diffusion(DPSynther):
                     if self.global_rank == 0:
                         logging.info(f"Replaced with {num_samples} real data samples from sensitive_dataloader")
                 
-                fid_top = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
-                fid_bottom = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                fid_top, _, _ = compute_fid_with_images(top_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
+                fid_bottom, _, _ = compute_fid_with_images(bottem_x, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
 
                 if self.global_rank == 0:
                     logging.info("PE Selecting end!")
@@ -1477,7 +1486,7 @@ class PE_Diffusion(DPSynther):
                 x = sampler(images_list[i].to(self.device), labels_list[i].to(self.device), start_sigma=self._sigma_list[sigma_idx])
             samples.append(x.detach().cpu())
         
-        if samples:  # 确保有样本才进行拼接
+        if samples: 
             samples = torch.cat(samples).clamp(-1., 1.)
             result = (samples + 1) / 2
             if self.global_rank == 0:

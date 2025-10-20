@@ -96,7 +96,7 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2):
     fd = np.real(m + np.trace(sigma1 + sigma2 - s * 2))
     return fd
 
-def compute_fid(n_samples, n_gpus, sampling_shape, sampler, inception_model, stats_paths, device, n_classes=None, noise=None):
+def compute_fid(n_samples, n_gpus, sampling_shape, sampler, inception_model, stats_paths, device, n_classes=None, noise=None, cache_mean=None, cache_sigma=None):
     num_samples_per_gpu = int(np.ceil(n_samples / n_gpus))
 
     def generator(num_samples):
@@ -133,14 +133,17 @@ def compute_fid(n_samples, n_gpus, sampling_shape, sampler, inception_model, sta
     all_pool_mean = m.cpu().numpy()
     all_pool_sigma = s.cpu().numpy()
 
-    stats = np.load(stats_paths)
-    data_pools_mean = stats['mu']
-    data_pools_sigma = stats['sigma']
-    fid = calculate_frechet_distance(data_pools_mean, data_pools_sigma, all_pool_mean, all_pool_sigma)
+    if cache_mean is not None and cache_sigma is not None:
+        fid = calculate_frechet_distance(cache_mean, cache_sigma, all_pool_mean, all_pool_sigma)
+    else:
+        stats = np.load(stats_paths)
+        data_pools_mean = stats['mu']
+        data_pools_sigma = stats['sigma']
+        fid = calculate_frechet_distance(data_pools_mean, data_pools_sigma, all_pool_mean, all_pool_sigma)
     torch.cuda.empty_cache()
     return fid
 
-def compute_fid_with_images(images, sampling_shape, inception_model, stats_paths, device):
+def compute_fid_with_images(images, sampling_shape, inception_model, stats_paths, device, cache_mean=None, cache_sigma=None):
     def generator():
         num_sampling_rounds = int(np.ceil(len(images) / sampling_shape[0]))
         for i in range(num_sampling_rounds):
@@ -157,12 +160,15 @@ def compute_fid_with_images(images, sampling_shape, inception_model, stats_paths
     all_pool_mean = m.cpu().numpy()
     all_pool_sigma = s.cpu().numpy()
 
-    stats = np.load(stats_paths)
-    data_pools_mean = stats['mu']
-    data_pools_sigma = stats['sigma']
-    fid = calculate_frechet_distance(data_pools_mean, data_pools_sigma, all_pool_mean, all_pool_sigma)
+    if cache_mean is not None and cache_sigma is not None:
+        fid = calculate_frechet_distance(cache_mean, cache_sigma, all_pool_mean, all_pool_sigma)
+    else:
+        stats = np.load(stats_paths)
+        data_pools_mean = stats['mu']
+        data_pools_sigma = stats['sigma']
+        fid = calculate_frechet_distance(data_pools_mean, data_pools_sigma, all_pool_mean, all_pool_sigma)
     torch.cuda.empty_cache()
-    return fid
+    return fid, all_pool_mean, all_pool_sigma
 
 
 class FolderDataset(torch.utils.data.Dataset):
