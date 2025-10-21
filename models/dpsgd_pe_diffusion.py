@@ -724,7 +724,7 @@ class PE_Diffusion(DPSynther):
         torch.cuda.empty_cache()
         return config
 
-    def pe_pretrain(self, public_dataloader, config, start_optimizer=None):
+    def pe_pretrain(self, public_dataloader, config, start_optimizer=None, override_lr=None):
         if public_dataloader is None or config.n_epochs == 0:
             # If no public dataloader is provided, set pretraining flag to False and return.
             self.is_pretrain = False
@@ -758,10 +758,19 @@ class PE_Diffusion(DPSynther):
         ema = ExponentialMovingAverage(model.parameters(), decay=self.ema_rate)
 
         # Initialize the optimizer based on the configuration.
+        # If override_lr is provided, use it instead of config.optim.params
+        if override_lr is not None:
+            optim_params = copy.deepcopy(config.optim.params)
+            optim_params['lr'] = override_lr
+            if self.global_rank == 0:
+                logging.info(f'Using override learning rate: {override_lr}')
+        else:
+            optim_params = config.optim.params
+            
         if config.optim.optimizer == 'Adam':
-            optimizer = torch.optim.Adam(model.parameters(), **config.optim.params)
+            optimizer = torch.optim.Adam(model.parameters(), **optim_params)
         elif config.optim.optimizer == 'SGD':
-            optimizer = torch.optim.SGD(model.parameters(), **config.optim.params)
+            optimizer = torch.optim.SGD(model.parameters(), **optim_params)
         else:
             raise NotImplementedError("Optimizer not supported")
         
@@ -899,8 +908,8 @@ class PE_Diffusion(DPSynther):
                 ema.restore(model.parameters())
 
                 if self.global_rank == 0:
-                    logging.info('FID at epoch %d: %.6f (using EMA weights for generation)' % (epoch + 1, fid))
-                    logging.info('FID with finetuned data at epoch %d: %.6f (using EMA weights for generation)' % (epoch + 1, fid_with_finetuned_data))
+                    logging.info('FID at epoch %d: %.6f' % (epoch + 1, fid))
+                    logging.info('FID with finetuned data at epoch %d: %.6f' % (epoch + 1, fid_with_finetuned_data))
             model.train()
             dist.barrier()
             
@@ -1021,7 +1030,12 @@ class PE_Diffusion(DPSynther):
         self.all_config.pretrain.n_epochs = config.contrastive_n_epochs
         self.all_config.pretrain.batch_size = config.contrastive_batch_size
 
-        self.pe_pretrain(contrastive_dataloader, self.all_config.pretrain, start_optimizer=start_optimizer)
+        # Get contrastive learning rate if specified in config, otherwise use None (will use default from config.optim.params)
+        contrastive_lr = getattr(config, 'contrastive_lr', None)
+        if contrastive_lr is not None and self.global_rank == 0:
+            logging.info(f'Using separate contrastive learning rate: {contrastive_lr}')
+        
+        self.pe_pretrain(contrastive_dataloader, self.all_config.pretrain, start_optimizer=start_optimizer, override_lr=contrastive_lr)
         torch.cuda.empty_cache()
 
 
