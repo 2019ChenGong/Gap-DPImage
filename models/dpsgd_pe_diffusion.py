@@ -1147,6 +1147,8 @@ class PE_Diffusion(DPSynther):
         self.inception_model.model = self.inception_model.model.to(self.device)
 
         pe_freq = config.pe_freq
+        if 'config.num_nearest_neighbor' not in config:
+            config['config.num_nearest_neighbor'] = 1
         freq_images = []
         freq_labels = []
         freq_features = []
@@ -1272,7 +1274,7 @@ class PE_Diffusion(DPSynther):
                 torch.manual_seed(42)
                 np.random.seed(42)
                 
-                top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler_to_use)
+                top_x, top_y, bottem_x, bottem_y = self.pe_vote(images_to_select, label_to_select.numpy(), image_categories.numpy(), self.sensitive_features.numpy(), self.sensitive_labels.numpy(), selection_ratio=config.contrastive_selection_ratio, config=self.all_config, device=self.device, sampler=sampler_to_use, num_nearest_neighbor=config.num_nearest_neighbor)
 
                 print_dimensions_and_range(top_x, top_y, self.global_rank)
 

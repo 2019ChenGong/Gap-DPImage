@@ -51,6 +51,3 @@ def dp_nn_histogram(public_features, private_features, noise_multiplier,
         logging.info(f'Clipped largest noisy counters: {sorted(count)[::-1][:50]}')
     return count, clean_count
 
-
-    
-
