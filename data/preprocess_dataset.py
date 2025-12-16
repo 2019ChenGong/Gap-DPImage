@@ -340,6 +340,9 @@ def main(config):
             elif data_name == "cifar10":
                 sensitive_train_set = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=transforms.ToTensor())
                 sensitive_test_set = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=True, transform=transforms.ToTensor())
+            elif data_name == "lsun":
+                sensitive_train_set = torchvision.datasets.LSUN(root=data_dir, train=True, download=True, transform=transforms.ToTensor())
+                sensitive_test_set = torchvision.datasets.LSUN(root=data_dir, train=False, download=True, transform=transforms.ToTensor())
             elif data_name == "cifar100":
                 sensitive_train_set = torchvision.datasets.CIFAR100(root=data_dir, train=True, download=True, transform=transforms.ToTensor())
                 sensitive_test_set = torchvision.datasets.CIFAR100(root=data_dir, train=False, download=True, transform=transforms.ToTensor())

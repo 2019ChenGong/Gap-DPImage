@@ -897,21 +897,24 @@ class PE_Diffusion(DPSynther):
                 state['step'] += 1
                 state['ema'].update(model.parameters())
 
-            # Compute FID at each epoch.
-            model.eval()
-            with torch.no_grad():
-                # Use EMA weights for better generation quality
-                ema.store(model.parameters())
-                ema.copy_to(model.parameters())
-                fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
-                fid_with_finetuned_data = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes, cache_mean=self.top_fid_mean, cache_sigma=self.top_fid_sigma)
-                ema.restore(model.parameters())
+                # Compute FID at specified intervals.
+                fid_freq = getattr(config, 'fid_freq', 1)
+                fid_threshold = getattr(config, 'fid_threshold', 0)
+                if state['step'] % fid_freq == 0 and state['step'] >= fid_threshold:
+                    model.eval()
+                    with torch.no_grad():
+                        # Use EMA weights for better generation quality
+                        ema.store(model.parameters())
+                        ema.copy_to(model.parameters())
+                        fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                        fid_with_finetuned_data = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes, cache_mean=self.top_fid_mean, cache_sigma=self.top_fid_sigma)
+                        ema.restore(model.parameters())
 
-                if self.global_rank == 0:
-                    logging.info('FID at epoch %d: %.6f' % (epoch + 1, fid))
-                    logging.info('FID with finetuned data at epoch %d: %.6f' % (epoch + 1, fid_with_finetuned_data))
-            model.train()
-            dist.barrier()
+                        if self.global_rank == 0:
+                            logging.info('FID at step %d: %.6f' % (state['step'], fid))
+                            logging.info('FID with finetuned data at step %d: %.6f' % (state['step'], fid_with_finetuned_data))
+                    model.train()
+                    dist.barrier()
             
             if self.global_rank == 0:
                 logging.info('Completed Epoch %d' % (epoch + 1))
@@ -1259,9 +1262,14 @@ class PE_Diffusion(DPSynther):
                         logging.info(f"Gathered and merged samples from all GPUs: total {len(gen_x)} samples")
 
                 # combine
-                images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
-                label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
-                image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
+
+                # images_to_select = torch.cat([freq_images, time_images, gen_x.detach().cpu()])
+                # label_to_select = torch.cat([freq_labels, time_labels, gen_y.detach().cpu()])
+                # image_categories = torch.tensor([0]*len(freq_images)+[1]*len(time_images)+[2]*len(gen_x)).long()
+
+                images_to_select = gen_x.detach().cpu()
+                label_to_select = gen_y.detach().cpu()
+                image_categories = torch.tensor([0]*len(gen_x)).long()
 
                 fid_before_selection, _, _ = compute_fid_with_images(images_to_select, fid_sampling_shape, self.inception_model, self.fid_stats, self.device)
                 
@@ -1351,14 +1359,13 @@ class PE_Diffusion(DPSynther):
                     images_to_select = images_to_select[indices]
                     label_to_select = label_to_select[indices]
 
-                    # 修复NumPy数组的索引问题
                     indices = torch.randperm(top_x.size(0))
                     top_x = top_x[indices]
-                    top_y = top_y[indices.cpu().numpy()]  # 转换为numpy索引
+                    top_y = top_y[indices.cpu().numpy()] 
 
                     indices = torch.randperm(bottem_x.size(0))
                     bottem_x = bottem_x[indices]
-                    bottem_y = bottem_y[indices.cpu().numpy()]  # 转换为numpy索引
+                    bottem_y = bottem_y[indices.cpu().numpy()] 
 
                     show_images = []
                     for cls in range(self.private_num_classes):

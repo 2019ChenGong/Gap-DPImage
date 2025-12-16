@@ -313,7 +313,7 @@ def load_data(config):
             else:
                 public_train_set = SpecificClassPlaces365(public_train_set_, specific_class)
         elif config.public_data.name == "emnist":
-            public_train_set_ = torchvision.datasets.EMNIST(root=config.public_data.train_path, split="letters", train=True)
+            public_train_set_ = torchvision.datasets.EMNIST(root=config.public_data.train_path, split="letters", train=True, download=True, transform=trans)
             if specific_class is None:
                 public_train_set = public_train_set_
             else:
