@@ -30,8 +30,8 @@ new_cwd = os.path.dirname(os.getcwd())
 sys.path.insert(0, new_cwd)
 from data.stylegan3.dataset import ImageFolderDataset
 
-import os
 from PIL import Image
+from medmnist import OCTMNIST
 
 class COVIDxDataset(Dataset):
     def __init__(self, root_dir, split_files, transform=None):
@@ -310,6 +310,8 @@ def main(config):
             res_list = [256]
         elif data_name == 'covidx-cxr4':
             res_list = [1024]
+        elif data_name == 'octmnist':
+            res_list = [128]
         elif data_name == 'camelyon':
             res_list = [96]
         elif 'mnist' in data_name:
@@ -331,6 +333,9 @@ def main(config):
             elif data_name == "fmnist":
                 sensitive_train_set = torchvision.datasets.FashionMNIST(root=data_dir, train=True, download=True, transform=transforms.ToTensor())
                 sensitive_test_set = torchvision.datasets.FashionMNIST(root=data_dir, train=False, download=True, transform=transforms.ToTensor())
+            elif data_name == "octmnist":
+                sensitive_train_set = OCTMNIST(root=data_dir, split="train", size=128, download=True, transform=transforms.ToTensor())
+                sensitive_test_set = OCTMNIST(root=data_dir, split="test", size=128, download=True, transform=transforms.ToTensor())
             elif data_name == "eurosat":
                 sensitive_set = torchvision.datasets.ImageFolder(root=os.path.join(data_dir, "EuroSAT_RGB"), transform=transforms.ToTensor())
                 torch.manual_seed(0)

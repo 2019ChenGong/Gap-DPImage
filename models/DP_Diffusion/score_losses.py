@@ -145,7 +145,7 @@ class EDMLoss:
         self.label_unconditioning_prob = label_unconditioning_prob
         self.n_classes = n_classes
 
-    def get_loss(self, model, x, y, noise=None):
+    def get_loss(self, model, x, y, noise=None, ref_model=None):
         y = dropout_label_for_cfg_training(
             y, self.n_noise_samples, self.n_classes, self.label_unconditioning_prob, x.device)
 
@@ -168,10 +168,17 @@ class EDMLoss:
 
         w = (sigma ** 2. + self.sigma_data ** 2.) / \
             (sigma * self.sigma_data) ** 2.
-
-        pred = model(x_noisy.reshape(-1, *x.shape[1:]), sigma.reshape(-1, *sigma.shape[2:]), y).reshape(
+        if ref_model is not None:
+            pred1 = model(x_noisy.reshape(-1, *x.shape[1:]), sigma.reshape(-1, *sigma.shape[2:]), y).reshape(
             x.shape[0], self.n_noise_samples, *x.shape[1:])
-        loss = w * (pred - x_repeated) ** 2.
+            with torch.no_grad():
+                pred2 = ref_model(x_noisy.reshape(-1, *x.shape[1:]), sigma.reshape(-1, *sigma.shape[2:]), y).reshape(
+            x.shape[0], self.n_noise_samples, *x.shape[1:])
+            loss = w * (pred1 - pred2) ** 2.
+        else:
+            pred = model(x_noisy.reshape(-1, *x.shape[1:]), sigma.reshape(-1, *sigma.shape[2:]), y).reshape(
+                x.shape[0], self.n_noise_samples, *x.shape[1:])
+            loss = w * (pred - x_repeated) ** 2.
         loss = torch.mean(loss.reshape(loss.shape[0], -1), dim=-1)
         return loss
     

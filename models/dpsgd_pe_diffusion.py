@@ -756,6 +756,7 @@ class PE_Diffusion(DPSynther):
         # Wrap the model with DistributedDataParallel (DDP) for distributed training.
         model = DDP(self.model, device_ids=[self.local_rank])
         ema = ExponentialMovingAverage(model.parameters(), decay=self.ema_rate)
+        ema.load_state_dict(self.ema.state_dict())
 
         # Initialize the optimizer based on the configuration.
         # If override_lr is provided, use it instead of config.optim.params
@@ -834,6 +835,9 @@ class PE_Diffusion(DPSynther):
                             self.network.image_size)
 
         # Training loop over the specified number of epochs.
+        if self.all_config.train.contrastive == 'v3':
+            ref_model = copy.deepcopy(model)
+            ref_model.eval()
         for epoch in range(config.n_epochs):
             dataset_loader.sampler.set_epoch(epoch)
             for _, batch in enumerate(dataset_loader):
@@ -871,7 +875,6 @@ class PE_Diffusion(DPSynther):
                 # Prepare the input data for training.
                 train_x, train_y = train_x.to(self.device) * 2. - 1., train_y.to(self.device)
                 optimizer.zero_grad(set_to_none=True)
-                loss = loss_fn(model, train_x, train_y)
                 if label is not None:
                     label = label.to(self.device)
                     if self.all_config.train.contrastive == 'v1':
@@ -880,7 +883,12 @@ class PE_Diffusion(DPSynther):
                         features = model(train_x, torch.ones_like(train_y).float(), train_y, return_feature=True)
                         contrastive_loss = compute_loss(features.reshape(features.shape[0], -1), label)
                         loss = (loss * label.float()).mean() + contrastive_loss * self.all_config.train.contrastive_alpha
+                    elif self.all_config.train.contrastive == 'v3':
+                        loss1 = loss_fn(model, train_x[label==1], train_y[label==1]).mean()
+                        loss2 = loss_fn(model, train_x, train_y, ref_model=ref_model).mean()
+                        loss = loss1 + loss2 * self.all_config.train.contrastive_alpha
                 else:
+                    loss = loss_fn(model, train_x, train_y)
                     loss = loss.mean()
                 loss.backward()
                 optimizer.step()
@@ -929,7 +937,6 @@ class PE_Diffusion(DPSynther):
 
         # Apply the EMA weights to the model and store the EMA object.
         ema.copy_to(self.model.parameters())
-        self.ema = ema
 
         # Clean up the model and free GPU memory.
         del model
@@ -1093,6 +1100,7 @@ class PE_Diffusion(DPSynther):
         model = DPDDP(self.model)
         # Initialize Exponential Moving Average (EMA) for model parameters.
         ema = ExponentialMovingAverage(model.parameters(), decay=self.ema_rate)
+        self.ema = ema
 
         # Initialize the optimizer based on the configuration.
         if config.optim.optimizer == 'Adam':
@@ -1150,8 +1158,8 @@ class PE_Diffusion(DPSynther):
         self.inception_model.model = self.inception_model.model.to(self.device)
 
         pe_freq = config.pe_freq
-        if 'config.num_nearest_neighbor' not in config:
-            config['config.num_nearest_neighbor'] = 1
+        if 'num_nearest_neighbor' not in config:
+            config['num_nearest_neighbor'] = 1
         freq_images = []
         freq_labels = []
         freq_features = []
