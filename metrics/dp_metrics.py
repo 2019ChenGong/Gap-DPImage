@@ -15,6 +15,7 @@ from torchvision import transforms
 from datetime import datetime
 from metrics.load_public_model import load_public_model
 from models.DP_LDM.ldm.models.diffusion.ddim import DDIMSampler
+from evaluation.evaluator import get_prompt
 
 def image_variation_batch(rank, dataloader, args):
 
@@ -74,6 +75,62 @@ def image_variation_batch(rank, dataloader, args):
         for i in range(len(variations)):
             save_image(variations[i], os.path.join(rank_save_dir_variation, f'{count}.png'))
             save_image(local_images[i], os.path.join(rank_save_dir_original, f'{count}.png'))
+            count += 1
+        
+        if rank == 0:
+            pbar.update(batch_size)
+
+        if total_processed >= max_images:
+            break
+
+def image_generation_batch(rank, args):
+
+    size = args.size
+    world_size = args.world_size
+    variation_save_dir = args.variation_save_dir
+    max_images = args.max_images
+    variation_degree = args.variation_degree
+    _variation_num_inference_steps = args._variation_num_inference_steps
+    _variation_guidance_scale = args._variation_guidance_scale
+    model_id = args.model_id
+    torch.cuda.set_device(rank)
+    device = torch.device(f"cuda:{rank}")
+
+    total_processed = 0
+    rank_save_dir_variation = os.path.join(variation_save_dir, f"rank_{rank}")
+    os.makedirs(rank_save_dir_variation, exist_ok=True)
+    model = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+    model = model.to(device)
+    model.safety_checker = None
+    model.requires_safety_checker = False
+    model.set_progress_bar_config(disable=True)
+    count = 0
+
+    if rank == 0:
+        pbar = tqdm(total=max_images, desc="Generating variations", unit="img")
+
+    batch_size = args._variation_batch_size
+    pro = get_prompt(args.data_name)
+    while True:
+        original_size = (32, 32)
+        prompts = pro * (batch_size // world_size // len(pro))
+
+        variations = model(
+            prompt=prompts,
+            width=512,
+            height=512,
+            num_inference_steps=_variation_num_inference_steps,
+            guidance_scale=_variation_guidance_scale,
+            num_images_per_prompt=1,
+            output_type='np').images
+        print(prompts)
+
+        variations = torch.from_numpy(variations).permute(0, 3, 1, 2)
+        variations = F.interpolate(variations, size=original_size)
+        total_processed += batch_size
+
+        for i in range(len(variations)):
+            save_image(variations[i], os.path.join(rank_save_dir_variation, f'{count}.png'))
             count += 1
         
         if rank == 0:
@@ -189,6 +246,30 @@ class DPMetric(object):
         original_dataset = ImageFolder(args.original_save_dir, transform=transforms.ToTensor())
         variation_dataset = ImageFolder(args.variation_save_dir, transform=transforms.ToTensor())
         return DataLoader(original_dataset, batch_size=self.dataloader_size, shuffle=False), DataLoader(variation_dataset, batch_size=self.dataloader_size, shuffle=False)
+    
+    def _image_generation(self, save_dir, size=512, max_images=100):
+
+        os.makedirs(save_dir, exist_ok=True)
+        args = argparse.Namespace()
+        args.size = size
+        args.variation_save_dir = os.path.join(save_dir, 'variation')
+        os.makedirs(args.variation_save_dir, exist_ok=True)
+        args.max_images = max_images
+        args.variation_degree = self.variation_degree
+        args._variation_num_inference_steps = self._variation_num_inference_steps
+        args._variation_guidance_scale = self._variation_guidance_scale
+        args._variation_batch_size = self._variation_batch_size
+        args.data_name = self.data_name
+        world_size = torch.cuda.device_count()
+        if world_size < 2:
+            raise ValueError("Need at least 2 GPUs for multi-GPU generation.")
+        args.world_size = world_size
+        if hasattr(self.public_model, 'model_id'):
+            args.model_id = self.public_model.model_id
+            spawn(image_generation_batch, args=(args,), nprocs=world_size, join=True)
+
+        variation_dataset = ImageFolder(args.variation_save_dir, transform=transforms.ToTensor())
+        return DataLoader(variation_dataset, batch_size=self.dataloader_size, shuffle=False)
 
     def _round_to_uint8(self, image):
 

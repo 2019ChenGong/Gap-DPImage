@@ -5,9 +5,10 @@ import numpy as np
 from tqdm import tqdm
 from diffusers import StableDiffusionPipeline
 from diffusers import StableDiffusionImg2ImgPipeline
+from improved_diffusion import dist_util
 
 from .api import API
-from dpsda.pytorch_utils import dev
+# from dpsda.pytorch_utils import dev
 
 
 def _round_to_uint8(image):
@@ -34,7 +35,7 @@ class StableDiffusionAPI(API):
         self._random_sampling_pipe = StableDiffusionPipeline.from_pretrained(
             self._random_sampling_checkpoint, torch_dtype=torch.float16)
         self._random_sampling_pipe.safety_checker = None
-        self._random_sampling_pipe = self._random_sampling_pipe.to(dev())
+        self._random_sampling_pipe = self._random_sampling_pipe.to(dist_util.dev())
 
         self._variation_checkpoint = variation_checkpoint
         self._variation_guidance_scale = variation_guidance_scale
@@ -46,7 +47,7 @@ class StableDiffusionAPI(API):
                 self._variation_checkpoint,
                 torch_dtype=torch.float16)
         self._variation_pipe.safety_checker = None
-        self._variation_pipe = self._variation_pipe.to(dev())
+        self._variation_pipe = self._variation_pipe.to(dist_util.dev())
 
     @staticmethod
     def command_line_parser():
@@ -199,7 +200,7 @@ class StableDiffusionAPI(API):
                 [0.5, 0.5, 0.5])])
         images = [variation_transform(Image.fromarray(im))
                   for im in images]
-        images = torch.stack(images).to(dev())
+        images = torch.stack(images).to(dist_util.dev())
         max_batch_size = self._variation_batch_size
         variations = []
         num_iterations = int(np.ceil(

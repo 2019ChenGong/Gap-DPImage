@@ -366,16 +366,13 @@ def main(config):
                     def __init__(self, subset, transform=None):
                         self.subset = subset
                         self.transform = transform
-                        # 提前提取所有数据索引和标签（不加载图像到内存）
                         self.indices = list(range(len(subset)))
 
                     def __len__(self):
                         return len(self.indices)
 
                     def __getitem__(self, idx):
-                        # WILDS 返回: (x, y, metadata)
                         x, y, _ = self.subset[idx]
-                        # x 是 PIL Image 或 numpy array
                         if not isinstance(x, Image.Image):
                             x = Image.fromarray(x)
 
@@ -442,32 +439,34 @@ def main(config):
 
             transform_image = make_transform(config.transform, config.resolution, config.resolution)
 
-            data_dir = '/p/fzv6enresearch/gap/exp'
-            
+            # Use dataset-specific directory instead of hardcoded path
+            output_dir = os.path.join(config.data_dir, data_name)
+            os.makedirs(output_dir, exist_ok=True)
+
             if config.max_image is None:
                 max_idx = len(sensitive_train_set)
             else:
                 max_idx = min(config.max_image, len(sensitive_train_set))
-            archive_root_dir, save_bytes, close_dest = open_dest(os.path.join(data_dir, train_name + '.zip'))
+            archive_root_dir, save_bytes, close_dest = open_dest(os.path.join(output_dir, train_name + '.zip'))
             data_save(sensitive_train_loader, max_idx, transform_image, archive_root_dir, save_bytes, close_dest)
 
             if config.max_image is None:
                 max_idx = len(sensitive_test_set)
             else:
                 max_idx = min(config.max_image, len(sensitive_test_set))
-            archive_root_dir, save_bytes, close_dest = open_dest(os.path.join(data_dir, test_name + '.zip'))
+            archive_root_dir, save_bytes, close_dest = open_dest(os.path.join(output_dir, test_name + '.zip'))
             data_save(sensitive_test_loader, max_idx, transform_image, archive_root_dir, save_bytes, close_dest)
 
-            dataset = ImageFolderDataset(os.path.join(data_dir, train_name + '.zip'))
+            dataset = ImageFolderDataset(os.path.join(output_dir, train_name + '.zip'))
 
             # calculate the feature of training image for FID metric
-            fid_save(os.path.join(data_dir, fid_name + '.npz'), dataset, config.fid_batch_size)
+            fid_save(os.path.join(output_dir, fid_name + '.npz'), dataset, config.fid_batch_size)
     
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_name', nargs="*", default=["mnist", "fmnist", "cifar10", "cifar100", "celeba", "camelyon", "imagenet", "places365", "emnist", "lsun",  "covidx-cxr4"], help='List of datasets to use. Default is all provided datasets.')
+    parser.add_argument('--data_name', nargs="*", default=["mnist", "fmnist", "cifar10", "cifar100", "celeba", "camelyon", "imagenet", "places365", "emnist", "lsun",  "covidx-cxr4", "octmnist"], help='List of datasets to use. Default is all provided datasets.')
     parser.add_argument('--resolution', default=32, type=int, help='Resolution of the images. Default is 32.')
     parser.add_argument('--c', default=3, type=int, help='Number of color channels in the images. Default is 3 (RGB).')
     parser.add_argument('--fid_batch_size', default=500, type=int, help='Batch size for FID calculation. Default is 500.')

@@ -51,6 +51,8 @@ def load_sensitive_data(config):
             train_size = 269538
         elif "covidx" in config.sensitive_data.name:
             train_size = 67863
+        elif "octmnist" in config.sensitive_data.name:
+            train_size = 97477
         else:
             raise NotImplementedError
 

@@ -23,7 +23,7 @@ def obtain_path(dataset_name):
         resolution = 512
         channel = 3
 
-    elif dataset_name == 'celeba':
+    elif dataset_name == 'celeba_male':
         train_path = 'dataset/celeba/train_256_Male.zip'
         test_path =  'dataset/celeba/test_256_Male.zip'
         resolution = 256
@@ -34,6 +34,12 @@ def obtain_path(dataset_name):
         test_path =  'exp/test_96.zip'
         resolution = 96
         channel = 3
+
+    elif dataset_name == 'octmnist':
+        train_path = 'dataset/octmnist/train_128.zip'
+        test_path =  'dataset/octmnist/test_128.zip'
+        resolution = 128
+        channel = 1
 
     else:
         print(f"Error: '{dataset_name}' is not a valid dataset name.")
@@ -51,6 +57,7 @@ def load_sensitive_data(dataset_name):
             train_path, resolution, channel, use_labels=True)
     sensitive_test_set = ImageFolderDataset(
             test_path, resolution, channel, use_labels=True)
+    sensitive_train_set.data_name = dataset_name
 
     batch_size = 100
     

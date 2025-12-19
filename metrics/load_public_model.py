@@ -24,7 +24,7 @@ def load_public_model(public_model):
 
     if public_model == 'stable-diffusion-2-1-base':
         print(f"Loading model: {public_model}")
-        model_id = "stabilityai/stable-diffusion-2-1-base"
+        model_id = "Manojb/stable-diffusion-2-1-base"
         model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
         model = model.to("cuda")
         model.safety_checker = None
