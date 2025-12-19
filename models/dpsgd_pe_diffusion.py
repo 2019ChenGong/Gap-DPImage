@@ -14,6 +14,7 @@ import random
 from models.DP_Diffusion.model.ncsnpp import NCSNpp
 from models.DP_Diffusion.utils.util import set_seeds, make_dir, save_checkpoint, sample_random_image_batch, compute_fid, compute_fid_with_images
 from fld.features.InceptionFeatureExtractor import InceptionFeatureExtractor
+from fld.metrics.PrecisionRecall import PrecisionRecall
 from models.DP_Diffusion.model.ema import ExponentialMovingAverage
 from models.DP_Diffusion.score_losses import EDMLoss, VPSDELoss, VESDELoss, VLoss
 from models.DP_Diffusion.denoiser import EDMDenoiser, VPSDEDenoiser, VESDEDenoiser, VDenoiser
@@ -838,6 +839,9 @@ class PE_Diffusion(DPSynther):
         if self.all_config.train.contrastive == 'v3':
             ref_model = copy.deepcopy(model)
             ref_model.eval()
+            # Disable gradient computation for ref_model
+            # for param in ref_model.parameters():
+            #     param.requires_grad = False
         for epoch in range(config.n_epochs):
             dataset_loader.sampler.set_epoch(epoch)
             for _, batch in enumerate(dataset_loader):
@@ -886,7 +890,7 @@ class PE_Diffusion(DPSynther):
                     elif self.all_config.train.contrastive == 'v3':
                         loss1 = loss_fn(model, train_x[label==1], train_y[label==1]).mean()
                         loss2 = loss_fn(model, train_x, train_y, ref_model=ref_model).mean()
-                        loss = loss1 + loss2 * self.all_config.train.contrastive_alpha
+                        loss = self.all_config.train.contrastive_alpha * loss1 + loss2 * (1 - self.all_config.train.contrastive_alpha)
                 else:
                     loss = loss_fn(model, train_x, train_y)
                     loss = loss.mean()
@@ -923,9 +927,103 @@ class PE_Diffusion(DPSynther):
                             logging.info('FID with finetuned data at step %d: %.6f' % (state['step'], fid_with_finetuned_data))
                     model.train()
                     dist.barrier()
-            
+
             if self.global_rank == 0:
                 logging.info('Completed Epoch %d' % (epoch + 1))
+
+            # Compute FID, Precision and Recall after each epoch
+            model.eval()
+            with torch.no_grad():
+                ema.store(model.parameters())
+                ema.copy_to(model.parameters())
+
+                # Compute FID
+                fid = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes)
+                fid_with_finetuned_data = compute_fid(config.fid_samples, self.global_size, fid_sampling_shape, sampler, inception_model, self.fid_stats, self.device, self.private_num_classes, cache_mean=self.top_fid_mean, cache_sigma=self.top_fid_sigma)
+
+                # Compute Precision and Recall (only on rank 0 to avoid multiprocessing issues)
+                if self.global_rank == 0:
+                    try:
+                        # Generate samples for precision/recall computation
+                        gen_samples = []
+                        num_pr_samples = min(config.fid_samples, 5000)  # Use smaller number to avoid memory issues
+                        pr_batch_size = fid_sampling_shape[0]
+                        num_batches = (num_pr_samples + pr_batch_size - 1) // pr_batch_size
+
+                        for _ in range(num_batches):
+                            gen_x, gen_y = generate_batch(sampler, fid_sampling_shape, self.device, self.private_num_classes, self.private_num_classes)
+                            gen_samples.append(gen_x.cpu())  # Move to CPU immediately to save GPU memory
+
+                        gen_samples = torch.cat(gen_samples)[:num_pr_samples]
+
+                        # Convert to [0, 1] range for inception model
+                        gen_samples = (gen_samples + 1) / 2
+
+                        # Handle grayscale images
+                        if gen_samples.shape[1] == 1:
+                            gen_samples = gen_samples.repeat(1, 3, 1, 1)
+
+                        # Extract features for generated samples
+                        gen_feat = inception_model.get_tensor_features(gen_samples.to(self.device))
+
+                        # Try to get training features
+                        train_feat = None
+                        try:
+                            # First try to get cached features
+                            train_feat = inception_model.get_tensor_features(torch.tensor([0]), name="train")
+                        except:
+                            # If no cache, we need to extract from training data
+                            # Create a simple iterator without multiprocessing
+                            train_samples = []
+                            train_dataset = public_dataloader.dataset
+                            indices = torch.randperm(len(train_dataset))[:num_pr_samples]
+
+                            for idx in indices:
+                                sample = train_dataset[idx]
+                                if len(sample) == 2:
+                                    train_x, train_y = sample
+                                else:
+                                    train_x, train_y, label = sample
+                                train_samples.append(train_x)
+
+                            train_samples = torch.stack(train_samples)
+
+                            # Handle grayscale images
+                            if train_samples.shape[1] == 1:
+                                train_samples = train_samples.repeat(1, 3, 1, 1)
+
+                            train_feat = inception_model.get_tensor_features(train_samples.to(self.device))
+
+                        if train_feat is not None:
+                            # Compute Precision and Recall
+                            precision_metric = PrecisionRecall(mode="Precision")
+                            recall_metric = PrecisionRecall(mode="Recall", num_neighbors=5)
+
+                            precision = precision_metric.compute_metric(train_feat, None, gen_feat)
+                            recall = recall_metric.compute_metric(train_feat, None, gen_feat)
+
+                            logging.info('Precision after Epoch %d: %.6f' % (epoch + 1, precision))
+                            logging.info('Recall after Epoch %d: %.6f' % (epoch + 1, recall))
+                        else:
+                            logging.info('Train features not available, skipping Precision/Recall for Epoch %d' % (epoch + 1))
+
+                        # Clean up
+                        del gen_samples, gen_feat
+                        if train_feat is not None:
+                            del train_feat
+                        torch.cuda.empty_cache()
+
+                    except Exception as e:
+                        logging.warning('Error computing Precision/Recall for Epoch %d: %s' % (epoch + 1, str(e)))
+
+                ema.restore(model.parameters())
+
+                if self.global_rank == 0:
+                    logging.info('FID after Epoch %d: %.6f' % (epoch + 1, fid))
+                    logging.info('FID with finetuned data after Epoch %d: %.6f' % (epoch + 1, fid_with_finetuned_data))
+            model.train()
+            dist.barrier()
+
             torch.cuda.empty_cache()
 
         # Save the final checkpoint.
@@ -1213,6 +1311,8 @@ class PE_Diffusion(DPSynther):
                             self.network.image_size, self.network.image_size)
 
         # Start the training loop.
+        top_x = None
+        top_y = None
         for epoch in range(config.n_epochs):
             pe_lock = True
             
@@ -1359,8 +1459,8 @@ class PE_Diffusion(DPSynther):
                 # constractiving learning
                 torch.cuda.empty_cache()
 
-
-                self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config, start_optimizer=optimizer.original_optimizer if 'optimizer_reuse' in config and config['optimizer_reuse'] else None)
+                if config.contrastive != 'v4': 
+                    self.constractive_learning(top_x, top_y, bottem_x, bottem_y, epoch, config, start_optimizer=optimizer.original_optimizer if 'optimizer_reuse' in config and config['optimizer_reuse'] else None)
 
                 if self.global_rank == 0:
                     indices = torch.randperm(images_to_select.size(0))
@@ -1463,6 +1563,18 @@ class PE_Diffusion(DPSynther):
                     
                     x = train_x.to(self.device) * 2. - 1.
                     y = train_y.to(self.device).long()
+                    if top_x is not None and top_y is not None and config.contrastive == 'v4':
+                        num_samples = x.shape[0]  # 当前 batch size
+                        total_top = top_x.shape[0]
+                        
+                        # 随机采样 num_samples 个不重复的索引（如果 total_top >= num_samples）
+                        if total_top >= num_samples:
+                            idx = torch.randperm(total_top, device=top_x.device)[:num_samples]
+                        else:
+                            # 如果 top_x 不够，有放回采样（或重复）
+                            idx = torch.randint(0, total_top, (num_samples,), device=top_x.device)
+                        x = torch.cat([x, top_x[idx].to(self.device) * 2. - 1.])
+                        y = torch.cat([y, torch.from_numpy(top_y[idx]).to(self.device).long()])
 
                     # Perform a forward pass and backpropagation.
                     optimizer.zero_grad(set_to_none=True)
