@@ -557,6 +557,7 @@ def get_prompt(data_name: str):
     
     elif data_name.startswith("camelyon"):
         return ["A normal lymph node image", "A lymph node histopathology image"]
-    
     else:
-        raise NotImplementedError
+        return [""]
+    # else:
+    #     raise NotImplementedError

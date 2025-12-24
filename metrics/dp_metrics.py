@@ -123,7 +123,6 @@ def image_generation_batch(rank, args):
             guidance_scale=_variation_guidance_scale,
             num_images_per_prompt=1,
             output_type='np').images
-        print(prompts)
 
         variations = torch.from_numpy(variations).permute(0, 3, 1, 2)
         variations = F.interpolate(variations, size=original_size)
@@ -203,6 +202,57 @@ def image_variation_batch_ldm(rank, dataloader, args):
         if total_processed >= max_images:
             break
 
+
+def image_generation_batch_ldm(rank, args):
+
+    size = 32
+    world_size = args.world_size
+    variation_save_dir = args.variation_save_dir
+    max_images = args.max_images
+    variation_degree = args.variation_degree
+    _variation_num_inference_steps = 50
+    _variation_guidance_scale = args._variation_guidance_scale
+
+    torch.cuda.set_device(rank)
+    device = torch.device(f"cuda:{rank}")
+
+    total_processed = 0
+    rank_save_dir_variation = os.path.join(variation_save_dir, f"rank_{rank}")
+    os.makedirs(rank_save_dir_variation, exist_ok=True)
+    model = load_public_model('dpimagebench-ldm')
+    model = model.to(device)
+    sampler = DDIMSampler(model)
+
+    def var_func(num, size):
+        xc = torch.tensor([0])
+        c = model.get_learned_conditioning({model.cond_stage_key: xc.to(device)})
+        conditioning = c.repeat(num, 1, 1)
+        z, _ = sampler.sample(batch_size=num, shape=(3, size, size), S=_variation_num_inference_steps, conditioning=conditioning)
+        output = model.decode_first_stage(z)
+        return torch.clamp(output/2+0.5, min=0.0, max=1.0)
+
+    count = 0
+
+    if rank == 0:
+        pbar = tqdm(total=max_images, desc="Generating variations", unit="img")
+
+    batch_size = args._variation_batch_size
+    original_size = (32, 32)
+    while True:
+        variations = var_func(batch_size//world_size, size)
+        variations = F.interpolate(variations, size=original_size)
+        total_processed += batch_size
+
+        for i in range(len(variations)):
+            save_image(variations[i], os.path.join(rank_save_dir_variation, f'{count}.png'))
+            count += 1
+        
+        if rank == 0:
+            pbar.update(batch_size)
+
+        if total_processed >= max_images:
+            break
+
 class DPMetric(object):
 
     def __init__(self, sensitive_dataset, public_model, epsilon):
@@ -267,6 +317,10 @@ class DPMetric(object):
         if hasattr(self.public_model, 'model_id'):
             args.model_id = self.public_model.model_id
             spawn(image_generation_batch, args=(args,), nprocs=world_size, join=True)
+        else:
+            args.bench_config = self.public_model.bench_config
+            args.ckpt_path = self.public_model.ckpt_path
+            spawn(image_generation_batch_ldm, args=(args,), nprocs=world_size, join=True)
 
         variation_dataset = ImageFolder(args.variation_save_dir, transform=transforms.ToTensor())
         return DataLoader(variation_dataset, batch_size=self.dataloader_size, shuffle=False)

@@ -12,7 +12,7 @@ import math
 
 class DPFID(DPMetric):
 
-    def __init__(self, sensitive_dataset, public_model, epsilon, delta=1e-5, clip_bound=10.0):
+    def __init__(self, sensitive_dataset, public_model, epsilon, delta=None, clip_bound=10.0):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
         self.inception_model = inception_v3(pretrained=True, transform_input=False).eval().to(self.device)
@@ -23,8 +23,13 @@ class DPFID(DPMetric):
         else:
             # Fallback: count batches (less accurate if drop_last=True)
             dataset_size = len(sensitive_dataset) * sensitive_dataset.batch_size
-        
-        self.delta = 1 / (math.sqrt(dataset_size) * dataset_size)  # delta for (epsilon, delta)-DP
+
+        # Use provided delta or set to 1/n^2 as a reasonable default
+        if delta is None:
+            self.delta = 1.0 / (dataset_size ** 2)
+        else:
+            self.delta = delta
+
         self.clip_bound = clip_bound  # L2 norm clipping bound for features
         self.privacy_budget_used = 0.0  # Track privacy budget consumption
 
@@ -80,46 +85,43 @@ class DPFID(DPMetric):
 
         # Compute mean of features
         mu1 = np.mean(real_features, axis=0)
-        mu2 = np.mean(generated_features, axis=0)
+        mu2 = np.mean(generated_features, axis=0)  # Generated/public data, no DP noise needed
 
         if apply_dp:
-            # Add DP noise to means
+            # Only add DP noise to sensitive data (real_features) statistics
             # Sensitivity of mean with clipped features: clip_bound / n
             mean_sensitivity_1 = self.clip_bound / n1
-            mean_sensitivity_2 = self.clip_bound / n2
 
-            # Use 40% of epsilon budget for means (20% each)
-            mu1 = self._add_gaussian_noise(mu1, mean_sensitivity_1, epsilon_fraction=0.2)
-            mu2 = self._add_gaussian_noise(mu2, mean_sensitivity_2, epsilon_fraction=0.2)
-            print(f"   Added DP noise to means (used {0.4 * self.epsilon:.4f} epsilon)")
+            # Use 50% of epsilon budget for mean
+            mu1 = self._add_gaussian_noise(mu1, mean_sensitivity_1, epsilon_fraction=0.5)
+            print(f"   Added DP noise to real data mean (used {0.5 * self.epsilon:.4f} epsilon)")
 
         # Compute covariance of features
         sigma1 = np.cov(real_features, rowvar=False)
-        sigma2 = np.cov(generated_features, rowvar=False)
+        sigma2 = np.cov(generated_features, rowvar=False)  # Generated/public data, no DP noise needed
 
         if apply_dp:
-            # Add DP noise to covariances
+            # Only add DP noise to sensitive data (real_features) covariance
             # Sensitivity of covariance with clipped features: 2 * clip_bound^2 / n
             # (based on sensitivity analysis for sample covariance)
             cov_sensitivity_1 = 2 * (self.clip_bound ** 2) / n1
-            cov_sensitivity_2 = 2 * (self.clip_bound ** 2) / n2
 
-            # Use 60% of epsilon budget for covariances (30% each)
-            sigma1 = self._add_gaussian_noise(sigma1, cov_sensitivity_1, epsilon_fraction=0.3)
-            sigma2 = self._add_gaussian_noise(sigma2, cov_sensitivity_2, epsilon_fraction=0.3)
-            print(f"   Added DP noise to covariances (used {0.6 * self.epsilon:.4f} epsilon)")
+            # Use 50% of epsilon budget for covariance
+            sigma1 = self._add_gaussian_noise(sigma1, cov_sensitivity_1, epsilon_fraction=0.5)
+            print(f"   Added DP noise to real data covariance (used {0.5 * self.epsilon:.4f} epsilon)")
 
-            # Ensure covariance matrices are positive semi-definite after noise addition
+            # Ensure covariance matrix is positive semi-definite after noise addition
             sigma1 = self._make_psd(sigma1)
-            sigma2 = self._make_psd(sigma2)
 
-        # Compute FID
+        # Compute FID using standard formula
         diff = mu1 - mu2
-        covmean = linalg.sqrtm(sigma1.dot(sigma2), disp=False)[0]
-        if np.iscomplexobj(covmean):
-            covmean = covmean.real
+        m = np.square(diff).sum()  # Squared L2 distance between means
 
-        fid = diff.dot(diff) + np.trace(sigma1 + sigma2 - 2 * covmean)
+        # Compute matrix square root of sigma1 @ sigma2
+        covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+
+        # Calculate FID and ensure it's real-valued
+        fid = np.real(m + np.trace(sigma1 + sigma2 - 2 * covmean))
         return fid
 
     def _make_psd(self, matrix):
