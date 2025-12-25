@@ -1,4 +1,5 @@
 import os
+os.environ['HF_HOME'] = '/bigtemp/fzv6en/diffuser_cache'
 import sys
 import argparse
 import torch

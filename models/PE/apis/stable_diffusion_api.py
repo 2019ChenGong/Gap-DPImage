@@ -17,13 +17,13 @@ def _round_to_uint8(image):
 
 class StableDiffusionAPI(API):
     def __init__(self, random_sampling_checkpoint,
-                 random_sampling_guidance_scale,
-                 random_sampling_num_inference_steps,
-                 random_sampling_batch_size,
-                 variation_checkpoint,
-                 variation_guidance_scale,
-                 variation_num_inference_steps,
-                 variation_batch_size,
+                 random_sampling_guidance_scale=7.5,
+                 random_sampling_num_inference_steps=50,
+                 random_sampling_batch_size=10,
+                 variation_checkpoint=None,
+                 variation_guidance_scale=7.5,
+                 variation_num_inference_steps=50,
+                 variation_batch_size=10,
                  *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._random_sampling_checkpoint = random_sampling_checkpoint
@@ -96,7 +96,7 @@ class StableDiffusionAPI(API):
             help='The batch size for variation API')
         return parser
 
-    def image_random_sampling(self, num_samples, size, prompts):
+    def image_random_sampling(self, num_samples, size, prompts, labels=None):
         """
         Generates a specified number of random image samples based on a given
         prompt and size using OpenAI's Image API.

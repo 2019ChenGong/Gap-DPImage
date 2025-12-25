@@ -74,7 +74,7 @@ class PE_Select(DPMetric):
         time = self.get_time()
         log_dir = 'exp/results.txt'
         gen_num = 5000
-        var_time = 1
+        var_time = 4
 
         sensitive_features = []
         sensitive_labels = []
@@ -88,129 +88,77 @@ class PE_Select(DPMetric):
         sensitive_features = torch.cat(sensitive_features).numpy()
         sensitive_labels = torch.cat(sensitive_labels).numpy()
 
-        public_features = []
-        public_labels = []
-
         self.public_model.model_id = "stable-diffusion-v1-5/stable-diffusion-v1-5"
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-0"
         generation_dataloader1 = self._image_generation(save_dir, max_images=gen_num)
 
-        self.public_model = load_public_model("dpimagebench-ldm")
+        self.public_model.model_id = "Manojb/stable-diffusion-2-1-base"
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-1"
         generation_dataloader2 = self._image_generation(save_dir, max_images=gen_num)
 
-        self.public_model.model_id = "Manojb/stable-diffusion-2-1-base"
-        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-1"
-        generation_dataloader3 = self._image_generation(save_dir, max_images=gen_num)
-
         self.public_model.model_id = "CompVis/stable-diffusion-v1-4"
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-2"
-        generation_dataloader4 = self._image_generation(save_dir, max_images=gen_num)
+        generation_dataloader3 = self._image_generation(save_dir, max_images=gen_num)
 
         self.public_model.model_id = "Manojb/stable-diffusion-v1-5"
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-3"
+        generation_dataloader4 = self._image_generation(save_dir, max_images=gen_num)
+
+        self.public_model = load_public_model("dpimagebench-ldm")
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-5"
         generation_dataloader5 = self._image_generation(save_dir, max_images=gen_num)
 
-        self.public_model.model_id = "Manojb/stable-diffusion-2-base"
-        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-4"
-        generation_dataloader6 = self._image_generation(save_dir, max_images=gen_num)
+        public_features, public_labels = self._prepare_public_features([generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5])
 
-        for x, _ in generation_dataloader1:
-            if x.shape[1] == 1:
-                x = x.repeat(1, 3, 1, 1)
-            features_batch = self.inception_model.get_feature_batch(x.to(self.device))
-            public_features.append(features_batch.detach().cpu())
-            public_labels += [0]*len(features_batch)
-        
-        for x, _ in generation_dataloader2:
-            if x.shape[1] == 1:
-                x = x.repeat(1, 3, 1, 1)
-            features_batch = self.inception_model.get_feature_batch(x.to(self.device))
-            public_features.append(features_batch.detach().cpu())
-            public_labels += [1]*len(features_batch)
-
-        for x, _ in generation_dataloader3:
-            if x.shape[1] == 1:
-                x = x.repeat(1, 3, 1, 1)
-            features_batch = self.inception_model.get_feature_batch(x.to(self.device))
-            public_features.append(features_batch.detach().cpu())
-            public_labels += [2]*len(features_batch)
-
-        for x, _ in generation_dataloader4:
-            if x.shape[1] == 1:
-                x = x.repeat(1, 3, 1, 1)
-            features_batch = self.inception_model.get_feature_batch(x.to(self.device))
-            public_features.append(features_batch.detach().cpu())
-            public_labels += [3]*len(features_batch)
-
-        for x, _ in generation_dataloader5:
-            if x.shape[1] == 1:
-                x = x.repeat(1, 3, 1, 1)
-            features_batch = self.inception_model.get_feature_batch(x.to(self.device))
-            public_features.append(features_batch.detach().cpu())
-            public_labels += [4]*len(features_batch)
-
-        for x, _ in generation_dataloader6:
-            if x.shape[1] == 1:
-                x = x.repeat(1, 3, 1, 1)
-            features_batch = self.inception_model.get_feature_batch(x.to(self.device))
-            public_features.append(features_batch.detach().cpu())
-            public_labels += [5]*len(features_batch)
-
-        public_features = torch.cat(public_features).numpy()
-        public_labels = torch.tensor(public_labels).long()
-
-        voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 6, sensitive_features, sensitive_labels, None)
+        voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 5, sensitive_features, sensitive_labels, None)
         with open(log_dir, 'a') as f:
             f.write(str(voting_results)+'\n')
         print(voting_results)
         # print(voting_results_detail)
+        generation_loader_list = [generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5]
 
         for var_step in range(var_time):
 
-            generation_dataloader1 = self._var_one_step(generation_dataloader1, voting_results_detail[0], save_dir=save_dir, max_images=gen_num)
-            generation_dataloader2 = self._var_one_step(generation_dataloader2, voting_results_detail[1], save_dir=save_dir, max_images=gen_num)
-            generation_dataloader3 = self._var_one_step(generation_dataloader3, voting_results_detail[2], save_dir=save_dir, max_images=gen_num)
-            generation_dataloader4 = self._var_one_step(generation_dataloader4, voting_results_detail[3], save_dir=save_dir, max_images=gen_num)
-            generation_dataloader5 = self._var_one_step(generation_dataloader5, voting_results_detail[4], save_dir=save_dir, max_images=gen_num)
-            generation_dataloader6 = self._var_one_step(generation_dataloader6, voting_results_detail[5], save_dir=save_dir, max_images=gen_num)
+            generation_loader_list = self._var_one_step_multi_loader(generation_loader_list, voting_results_detail, save_dir=f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}", max_images=gen_num)
 
-            public_features = []
-            public_labels = []
+            public_features, public_labels = self._prepare_public_features(generation_loader_list)
 
-            public_features.append(self._get_features_from_loader(generation_dataloader1))
-            public_labels += [0]*len(public_features[-1])
-
-            public_features.append(self._get_features_from_loader(generation_dataloader2))
-            public_labels += [1]*len(public_features[-1])
-
-            public_features.append(self._get_features_from_loader(generation_dataloader3))
-            public_labels += [2]*len(public_features[-1])
-
-            public_features.append(self._get_features_from_loader(generation_dataloader4))
-            public_labels += [3]*len(public_features[-1])
-
-            public_features.append(self._get_features_from_loader(generation_dataloader5))
-            public_labels += [4]*len(public_features[-1])
-
-            public_features.append(self._get_features_from_loader(generation_dataloader6))
-            public_labels += [5]*len(public_features[-1])
-            
-            public_features = torch.cat(public_features).numpy()
-            public_labels = torch.tensor(public_labels).long()
-
-            voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 6, sensitive_features, sensitive_labels, None)
+            voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 5, sensitive_features, sensitive_labels, None)
             print(voting_results)
             with open(log_dir, 'a') as f:
                 f.write(str(voting_results)+'\n')
             # print(voting_results_detail)
     
+    def _prepare_public_features(self, data_loader_list):
+        public_features = []
+        public_labels = []
+
+        for idx, data_loader in enumerate(data_loader_list):
+            public_features.append(self._get_features_from_loader(data_loader))
+            public_labels += [idx]*len(public_features[-1])
+        
+        public_features = torch.cat(public_features).numpy()
+        public_labels = torch.tensor(public_labels).long()
+
+        return public_features, public_labels
+
+    def _var_one_step_multi_loader(self, data_loader_list, voting_results_list, save_dir='exp/tmp', max_images=None):
+        new_data_loader_list = []
+        for idx, data_loader in enumerate(data_loader_list):
+            new_save_dir = save_dir + '-{}'.format(idx)
+            generation_dataloader = self._var_one_step(data_loader, voting_results_list[idx], save_dir=new_save_dir, max_images=max_images)
+            new_data_loader_list.append(generation_dataloader)
+
+        return new_data_loader_list
+
     def _get_features_from_loader(self, data_loader):
         public_features = []
         for x, _ in data_loader:
             if x.shape[1] == 1:
                 x = x.repeat(1, 3, 1, 1)
             features_batch = self.inception_model.get_feature_batch(x.to(self.device))
+            if features_batch.dim() == 1:
+                features_batch = features_batch.unsqueeze(0)
             public_features.append(features_batch.detach().cpu())
         
         public_features = torch.cat(public_features)

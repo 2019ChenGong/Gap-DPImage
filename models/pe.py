@@ -64,7 +64,7 @@ class PE(DPSynther):
         """
         super().__init__()  # Call the constructor of the parent class
         api_class = get_api_class_from_name(config.api)  # Get the API class based on the name provided in the config
-        if config.api == 'sd':
+        if config.api == 'sd' or config.api == 'stable_diffusion':
             self.api = api_class.from_dict_args(config.api_params)
         else:
             api_args = []  # Initialize an empty list to hold API arguments

@@ -3,7 +3,7 @@ import argparse
 
 
 class API(ABC):
-    def __init__(self, args=None):
+    def __init__(self, args=None, **kwargs):
         self.args = args
 
     @staticmethod

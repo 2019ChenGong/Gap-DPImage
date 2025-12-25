@@ -18,7 +18,7 @@ def dp_nn_histogram(public_features, private_features, noise_multiplier,
     else:
         raise Exception(f'Unknown mode {mode}')
     if torch.cuda.is_available():
-        index = faiss.index_cpu_to_gpu(faiss_res, device, index)
+        index = faiss.index_cpu_to_gpu(faiss_res, 0, index)
 
     index.add(public_features)
     if verbose:
