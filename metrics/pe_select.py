@@ -36,9 +36,7 @@ class PE_Select(DPMetric):
             self.image_width = batch.shape[3]
             break
 
-
     def pe_vote(self, features_to_selected, image_categories, model_num, sensitive_features, sensitive_labels, config, sigma=5, num_nearest_neighbor=1, nn_mode='L2', count_threshold=4.0, selection_ratio=0.1, device=None, sampler=None):
-
 
         sub_count, sub_clean_count = dp_nn_histogram(
             public_features=features_to_selected,
@@ -100,20 +98,38 @@ class PE_Select(DPMetric):
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-2"
         generation_dataloader3 = self._image_generation(save_dir, max_images=gen_num)
 
-        self.public_model.model_id = "Manojb/stable-diffusion-v1-5"
+        self.public_model.model_id = "stabilityai/stable-diffusion-2-base"
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-3"
         generation_dataloader4 = self._image_generation(save_dir, max_images=gen_num)
 
         self.public_model = load_public_model("dpimagebench-ldm")
-        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-5"
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-4"
         generation_dataloader5 = self._image_generation(save_dir, max_images=gen_num)
 
         public_features, public_labels = self._prepare_public_features([generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5])
 
+        model_names = [
+            "stable-diffusion-v1-5",
+            "stable-diffusion-2-1-base",
+            "stable-diffusion-v1-4",
+            "stable-diffusion-2-base",
+            "dpimagebench-ldm"
+        ]
+
         voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 5, sensitive_features, sensitive_labels, None)
+
+        # Print detailed voting results for round 0
+        print(f"\n{'='*80}")
+        print(f"Voting Results - Round 0 (Initial Generation)")
+        print(f"{'='*80}")
+        for cls_id in sorted(voting_results.keys()):
+            vote_count = voting_results[cls_id]
+            print(f"  Model {cls_id} ({model_names[cls_id]:30s}): {vote_count:6.0f} votes")
+        total_votes = sum(voting_results.values())
+
         with open(log_dir, 'a') as f:
-            f.write(str(voting_results)+'\n')
-        print(voting_results)
+            f.write(f"Round 0: {str(voting_results)}\n")
+
         # print(voting_results_detail)
         generation_loader_list = [generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5]
 
@@ -124,9 +140,21 @@ class PE_Select(DPMetric):
             public_features, public_labels = self._prepare_public_features(generation_loader_list)
 
             voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 5, sensitive_features, sensitive_labels, None)
-            print(voting_results)
+
+            # Print detailed voting results for each variation round
+            print(f"\n{'='*80}")
+            print(f"Voting Results - Round {var_step + 1} (After Variation)")
+            print(f"{'='*80}")
+            for cls_id in sorted(voting_results.keys()):
+                vote_count = voting_results[cls_id]
+                print(f"  Model {cls_id} ({model_names[cls_id]:30s}): {vote_count:6.0f} votes")
+            total_votes = sum(voting_results.values())
+            print(f"{'-'*80}")
+            print(f"  Total votes: {total_votes:6.0f}")
+            print(f"{'='*80}\n")
+
             with open(log_dir, 'a') as f:
-                f.write(str(voting_results)+'\n')
+                f.write(f"Round {var_step + 1}: {str(voting_results)}\n")
             # print(voting_results_detail)
     
     def _prepare_public_features(self, data_loader_list):

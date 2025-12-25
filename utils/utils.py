@@ -9,6 +9,7 @@ import torch.multiprocessing as mp
 
 from models.model_loader import load_model
 from data.dataset_loader import load_data
+from evaluation.evaluator import get_prompt
 
 
 def make_dir(dir):
@@ -130,6 +131,7 @@ def parse_config(opt, unknown):
     if opt.method in ["PE", "PE-SD"]:
         config.train.tmp_folder = config.sensitive_data.name
         config.train.private_num_classes = config.sensitive_data.n_classes
+        config.train.initial_prompt = get_prompt(config.sensitive_data.name)
         return config
     config.model.private_num_classes = config.sensitive_data.n_classes
     config.model.public_num_classes = config.public_data.n_classes
