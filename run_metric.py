@@ -32,8 +32,8 @@ if __name__ == '__main__':
     sys.path.append(os.getcwd())
     parser = argparse.ArgumentParser()
     parser.add_argument('--public_model', '-pm', default="stable-diffusion-v1-5", help="[stable-diffusion-2-1-base, \
-         stable-diffusion-v1-5, stable-diffusion-v1-4, stable-diffusion-2, stable-diffusion-2-base]")
-    parser.add_argument('--sensitive_dataset', '-sd', default="cifar10", help="[mnist, cifar10, covidx, celeba, camelyon]")
+         stable-diffusion-v1-5, stable-diffusion-v1-4, sstable-diffusion-2-base, dpimagebench-ldm]")
+    parser.add_argument('--sensitive_dataset', '-sd', default="cifar10", help="[mnist, cifar10, octmnist, celeba, camelyon]")
     parser.add_argument('--epsilon', '-e', type=float, default=0.05)
     parser.add_argument('--metrics', '-m', default="DPFID", help="[DPFID, DPGAP]")
     parser.add_argument('--save_dir', '-s_d', default="exp/test", help="the path used to store the variant images")

@@ -49,6 +49,9 @@ class StableDiffusionAPI(API):
         self._variation_pipe.safety_checker = None
         self._variation_pipe = self._variation_pipe.to(dist_util.dev())
 
+        self._random_sampling_pipe.set_progress_bar_config(disable=True)
+        self._variation_pipe.set_progress_bar_config(disable=True)
+
     @staticmethod
     def command_line_parser():
         parser = super(
@@ -126,6 +129,7 @@ class StableDiffusionAPI(API):
         return_prompts = []
         width, height = list(map(int, size.split('x')))
         for prompt_i, prompt in enumerate(prompts):
+            print(prompt)
             num_samples_for_prompt = (num_samples + prompt_i) // len(prompts)
             num_iterations = int(np.ceil(
                 float(num_samples_for_prompt) / max_batch_size))
@@ -137,6 +141,7 @@ class StableDiffusionAPI(API):
                     prompt=prompt,
                     width=width,
                     height=height,
+                    disable_progress_bar=True,
                     num_inference_steps=(
                         self._random_sampling_num_inference_steps),
                     guidance_scale=self._random_sampling_guidance_scale,
@@ -211,6 +216,7 @@ class StableDiffusionAPI(API):
                                (iteration + 1) * max_batch_size],
                 image=images[iteration * max_batch_size:
                              (iteration + 1) * max_batch_size],
+                             disable_progress_bar=True,
                 num_inference_steps=self._variation_num_inference_steps,
                 strength=variation_degree,
                 guidance_scale=self._variation_guidance_scale,

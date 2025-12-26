@@ -47,18 +47,18 @@ train:
   private_image_size: 28
   private_num_classes: 10
   num_samples_schedule:
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
+  - 600
   variation_degree_schedule:
   - 0
   - 0

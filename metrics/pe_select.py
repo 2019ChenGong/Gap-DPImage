@@ -98,7 +98,7 @@ class PE_Select(DPMetric):
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-2"
         generation_dataloader3 = self._image_generation(save_dir, max_images=gen_num)
 
-        self.public_model.model_id = "stabilityai/stable-diffusion-2-base"
+        self.public_model.model_id = "Manojb/stable-diffusion-2-base"
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-3"
         generation_dataloader4 = self._image_generation(save_dir, max_images=gen_num)
 

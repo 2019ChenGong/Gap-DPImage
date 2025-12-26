@@ -22,19 +22,18 @@ def load_ldm_model_from_config(config, ckpt):
 
 def load_public_model(public_model):
 
-    if public_model == 'stable-diffusion-2-1-base':
+    if public_model == 'stable-diffusion-v1-5':
         print(f"Loading model: {public_model}")
-        model_id = "Manojb/stable-diffusion-2-1-base"
+        model_id = "stable-diffusion-v1-5/stable-diffusion-v1-5"
         model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
         model = model.to("cuda")
         model.safety_checker = None
         model.requires_safety_checker = False
         model.model_id = model_id
         print(f"Loading done!")
-
-    elif public_model == 'stable-diffusion-v1-5':
+    elif public_model == 'stable-diffusion-2-1-base':
         print(f"Loading model: {public_model}")
-        model_id = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+        model_id = "Manojb/stable-diffusion-2-1-base"
         model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
         model = model.to("cuda")
         model.safety_checker = None
@@ -50,18 +49,18 @@ def load_public_model(public_model):
         model.requires_safety_checker = False
         model.model_id = model_id
         print(f"Loading done!")
-    elif public_model == 'stable-diffusion-2':
+    elif public_model == 'stable-diffusion-2-base':
         print(f"Loading model: {public_model}")
-        model_id = "stabilityai/stable-diffusion-2"
+        model_id = "Manojb/stable-diffusion-2-base"
         model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
         model = model.to("cuda")
         model.safety_checker = None
         model.requires_safety_checker = False
         model.model_id = model_id
         print(f"Loading done!")
-    elif public_model == 'stable-diffusion-2-base':
+    elif public_model == 'stable-diffusion-2':
         print(f"Loading model: {public_model}")
-        model_id = "stabilityai/stable-diffusion-2-base"
+        model_id = "stabilityai/stable-diffusion-2"
         model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
         model = model.to("cuda")
         model.safety_checker = None

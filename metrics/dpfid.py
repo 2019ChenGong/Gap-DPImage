@@ -11,69 +11,15 @@ import os
 import shutil
 import math
 
-class InceptionV3FeatureExtractor(nn.Module):
-    """Wrapper to extract 2048-dim pool features from Inception V3"""
-
-    def __init__(self, inception_model):
-        super().__init__()
-        self.inception = inception_model
-
-    def forward(self, x):
-        # Forward through Inception V3 up to the avgpool layer
-        # See torchvision/models/inception.py for the full forward pass
-
-        # N x 3 x 299 x 299
-        x = self.inception.Conv2d_1a_3x3(x)
-        # N x 32 x 149 x 149
-        x = self.inception.Conv2d_2a_3x3(x)
-        # N x 32 x 147 x 147
-        x = self.inception.Conv2d_2b_3x3(x)
-        # N x 64 x 147 x 147
-        x = self.inception.maxpool1(x)
-        # N x 64 x 73 x 73
-        x = self.inception.Conv2d_3b_1x1(x)
-        # N x 80 x 73 x 73
-        x = self.inception.Conv2d_4a_3x3(x)
-        # N x 192 x 71 x 71
-        x = self.inception.maxpool2(x)
-        # N x 192 x 35 x 35
-        x = self.inception.Mixed_5b(x)
-        # N x 256 x 35 x 35
-        x = self.inception.Mixed_5c(x)
-        # N x 288 x 35 x 35
-        x = self.inception.Mixed_5d(x)
-        # N x 288 x 35 x 35
-        x = self.inception.Mixed_6a(x)
-        # N x 768 x 17 x 17
-        x = self.inception.Mixed_6b(x)
-        # N x 768 x 17 x 17
-        x = self.inception.Mixed_6c(x)
-        # N x 768 x 17 x 17
-        x = self.inception.Mixed_6d(x)
-        # N x 768 x 17 x 17
-        x = self.inception.Mixed_6e(x)
-        # N x 768 x 17 x 17
-        x = self.inception.Mixed_7a(x)
-        # N x 1280 x 8 x 8
-        x = self.inception.Mixed_7b(x)
-        # N x 2048 x 8 x 8
-        x = self.inception.Mixed_7c(x)
-        # N x 2048 x 8 x 8
-        # Adaptive average pooling
-        x = self.inception.avgpool(x)
-        # N x 2048 x 1 x 1
-        x = torch.flatten(x, 1)
-        # N x 2048
-        return x
-
 class DPFID(DPMetric):
 
-    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=20.0):
+    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=1.0, clip_bound=20.0):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
-        # Load Inception V3 model and wrap it to extract 2048-dim features
+        # Load Inception V3 and replace fc layer with Identity to get 2048-dim pool features
         inception = inception_v3(pretrained=True, transform_input=False).eval()
-        self.inception_model = InceptionV3FeatureExtractor(inception).eval().to(self.device)
+        inception.fc = nn.Identity()  # Replace fc layer to output 2048-dim instead of 1000-dim
+        self.inception_model = inception.to(self.device)
 
         # DP parameters - using noise scale instead of privacy budget
         self.noise_multiplier = noise_multiplier  # Noise scale (sigma)
@@ -103,12 +49,6 @@ class DPFID(DPMetric):
 
         if images.shape[1] != 3:
             images = images.repeat(1, 3, 1, 1)
-
-        # Apply ImageNet normalization (required when transform_input=False)
-        # mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225]
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(images.device)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(images.device)
-        images = (images - mean) / std
 
         return images.to(self.device)
 
@@ -145,7 +85,7 @@ class DPFID(DPMetric):
             for batch, _ in images:
                 batch = self._preprocess_images(batch, is_tensor=is_tensor)
                 feats = self.inception_model(batch)
-                # Features are already (batch, 2048) from InceptionV3FeatureExtractor
+                # Features are (batch, 2048) - fc layer replaced with Identity
                 feats = feats.cpu().numpy()
                 features.append(feats)
 
@@ -251,7 +191,7 @@ class DPFID(DPMetric):
 
         # Generate variations
         original_dataloader, variations_dataloader = self._image_variation(
-            self.sensitive_dataset, save_dir, max_images=self.dataset_size
+            self.sensitive_dataset, save_dir, max_images=2000
         )
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations: {len(variations_dataloader.dataset)}")
 
