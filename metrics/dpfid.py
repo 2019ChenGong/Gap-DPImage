@@ -191,7 +191,7 @@ class DPFID(DPMetric):
 
         # Generate variations
         original_dataloader, variations_dataloader = self._image_variation(
-            self.sensitive_dataset, save_dir, max_images=2000
+            self.sensitive_dataset, save_dir, max_images=self.dataset_size
         )
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations: {len(variations_dataloader.dataset)}")
 
