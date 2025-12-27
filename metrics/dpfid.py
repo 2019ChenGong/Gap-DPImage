@@ -6,6 +6,7 @@ import numpy as np
 from torchvision.models import inception_v3
 from torchvision.transforms import functional as F
 from scipy import linalg
+from opacus.accountants.analysis import rdp as privacy_analysis
 
 import os
 import shutil
@@ -13,7 +14,7 @@ import math
 
 class DPFID(DPMetric):
 
-    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=20.0):
+    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=15.0):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
         # Load Inception V3 and replace fc layer with Identity to get 2048-dim pool features
@@ -59,14 +60,10 @@ class DPFID(DPMetric):
         # Debug info
         num_clipped = clipping_mask.sum()
         total_samples = len(features)
-        print(f"\n   ✂️  Feature clipping statistics:")
-        print(f"      Samples clipped: {num_clipped}/{total_samples} ({100*num_clipped/total_samples:.1f}%)")
-        print(f"      Norm before clipping - mean: {norms.mean():.4f}, max: {norms.max():.4f}, min: {norms.min():.4f}")
 
         features = np.where(clipping_mask, features * (self.clip_bound / norms), features)
 
         norms_after = np.linalg.norm(features, axis=1, keepdims=True)
-        print(f"      Norm after clipping - mean: {norms_after.mean():.4f}, max: {norms_after.max():.4f}")
 
         return features
 
@@ -105,52 +102,58 @@ class DPFID(DPMetric):
         feature_dim = real_features.shape[1]
 
         # Compute mean of features
-        mu1 = np.mean(real_features, axis=0)
-        mu2 = np.mean(generated_features, axis=0)  # Generated/public data, no noise
-
-        # Compute covariance of features
-        sigma1 = np.cov(real_features, rowvar=False)
-        sigma2 = np.cov(generated_features, rowvar=False)
+        sum_real = np.sum(real_features, axis=0)
+        outer_product_real = real_features.T @ real_features
+        sum_gen = np.sum(generated_features, axis=0)
+        outer_product_gen = generated_features.T @ generated_features
 
         if apply_dp:
-            # Add DP noise to statistics (mean and covariance)
-            # Sensitivity analysis:
-            # - Mean sensitivity: ||μ_sensitivity|| = clip_bound / n
-            # - Covariance sensitivity: ||Σ_sensitivity|| = 2 × clip_bound² / n
 
-            mean_sensitivity = self.clip_bound / n1
-            cov_sensitivity = 2 * (self.clip_bound ** 2) / n1
+            # Add Gaussian noise to sum (will divide by n later to get mean)
+            # Both real and generated features need noise since variations come from sensitive data
+            sum_noise_std = self.clip_bound * self.noise_multiplier
+            sum_real += np.random.normal(0, sum_noise_std, size=sum_real.shape)
+            sum_gen += np.random.normal(0, sum_noise_std, size=sum_gen.shape)
 
-            print(f"\n   🔒 DP protection via statistic-level noise:")
-            print(f"      Mean sensitivity: {mean_sensitivity:.6f}")
-            print(f"      Covariance sensitivity: {cov_sensitivity:.6f}")
+            # Add Gaussian noise to outer product
+            # IMPORTANT: Use independent noise for real and generated features
+            outer_product_noise_std = (self.clip_bound ** 2) * self.noise_multiplier
 
-            # Add Gaussian noise to mean (each dimension independently)
-            mean_noise_std = mean_sensitivity * self.noise_multiplier
-            mean_noise = np.random.normal(0, mean_noise_std, size=mu1.shape)
-            mu1 = mu1 + mean_noise
+            # Noise for real features
+            noise_matrix_real = np.random.normal(0, outer_product_noise_std, size=(feature_dim, feature_dim))
+            noise_matrix_real = (noise_matrix_real + noise_matrix_real.T) / np.sqrt(2)
+            outer_product_real += noise_matrix_real
 
-            print(f"      Mean noise std (per dim): {mean_noise_std:.6f}")
-            print(f"      Expected mean noise L2: {np.sqrt(feature_dim) * mean_noise_std:.6f}")
+            # Independent noise for generated features
+            noise_matrix_gen = np.random.normal(0, outer_product_noise_std, size=(feature_dim, feature_dim))
+            noise_matrix_gen = (noise_matrix_gen + noise_matrix_gen.T) / np.sqrt(2)
+            outer_product_gen += noise_matrix_gen
 
-            # Add Gaussian noise to covariance matrix
-            # IMPORTANT: Only add noise to diagonal elements to preserve positive definiteness
-            # Adding noise to all elements can make the matrix non-PSD, causing trace explosion
-            cov_noise_std = cov_sensitivity * self.noise_multiplier
+            mu1 = sum_real / n1
+            mu2 = sum_gen / n2
 
-            # Only add noise to diagonal
-            diagonal_noise = np.random.normal(0, cov_noise_std, size=feature_dim)
-            sigma1 = sigma1 + np.diag(diagonal_noise)
+            sigma1 = (outer_product_real / n1) - np.outer(mu1, mu1)
+            sigma2 = (outer_product_gen / n2) - np.outer(mu2, mu2)
 
-            # Note: diagonal-only noise preserves PSD property, so no need for _make_psd
+            print(f"      Sum noise std (per dim): {sum_noise_std:.6f}")
+            print(f"      Outer product noise std: {outer_product_noise_std:.6f}")
+
             # But we keep it for safety in case of numerical errors
-            eigvals_before = np.linalg.eigvalsh(sigma1)
-            if (eigvals_before < -1e-10).any():
-                print(f"      Warning: negative eigenvalues detected, applying _make_psd")
-                sigma1 = self._make_psd(sigma1)
+            eigvals_before_sigma1 = np.linalg.eigvalsh(sigma1)
+            eigvals_before_sigma2 = np.linalg.eigvalsh(sigma2)
 
-            print(f"      Covariance noise std (diagonal only): {cov_noise_std:.6f}")
-            print(f"      Expected trace increase from noise: {feature_dim * cov_noise_std:.6f}")
+            if (eigvals_before_sigma1 < 1e-10).any():
+                print(f"      Warning: sigma1 has negative eigenvalues, applying _make_psd")
+                sigma1 = self._make_psd(sigma1)
+            if (eigvals_before_sigma2 < 1e-10).any():
+                print(f"      Warning: sigma2 has negative eigenvalues, applying _make_psd")
+                sigma2 = self._make_psd(sigma2)
+        else:
+            mu1 = np.mean(real_features, axis=0)
+            mu2 = np.mean(generated_features, axis=0)
+
+            sigma1 = np.cov(real_features, rowvar=False)
+            sigma2 = np.cov(generated_features, rowvar=False)
 
         # Compute FID using standard formula
         diff = mu1 - mu2
@@ -179,7 +182,7 @@ class DPFID(DPMetric):
         eigvals[eigvals < 0] = 0  # Zero out negative eigenvalues
         return eigvecs @ np.diag(eigvals) @ eigvecs.T
 
-    def cal_metric(self, args, apply_dp=True):
+    def cal_metric(self, args, apply_dp=False):
         print("🚀 Starting DP-FID calculation...")
         print(f"🔒 DP parameters:")
         print(f"   Noise multiplier (σ): {self.noise_multiplier}")
@@ -203,7 +206,7 @@ class DPFID(DPMetric):
         )
         # Variations are considered public, no clipping or noise needed
         generated_features = self._get_inception_features(
-            variations_dataloader, is_tensor=True, apply_clipping=False
+            variations_dataloader, is_tensor=True, apply_clipping=apply_dp
         )
 
         print(f"   Real features shape: {real_features.shape}")

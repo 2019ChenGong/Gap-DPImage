@@ -147,6 +147,10 @@ class StableDiffusionAPI(API):
                     guidance_scale=self._random_sampling_guidance_scale,
                     num_images_per_prompt=batch_size,
                     output_type='np').images))
+                image_pil = images[-1][0]
+            # print(image_pil.shape)
+            # image_pil = Image.fromarray(image_pil)
+            # image_pil.save("/p/fzv6enresearch/gap/test.png")
             return_prompts.extend([prompt] * num_samples_for_prompt)
         return np.concatenate(images, axis=0), np.array(return_prompts)
 

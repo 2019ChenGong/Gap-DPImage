@@ -47,12 +47,12 @@ train:
   private_image_size: 32
   private_num_classes: 10
   num_samples_schedule:
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
-  - 60000
+  - 6000
+  - 6000
+  - 6000
+  - 6000
+  - 6000
+  - 6000
   variation_degree_schedule:
   - 0
   - 2
@@ -61,7 +61,7 @@ train:
   - 8
   - 10
   initial_prompt: null
-  image_size: 64x64
+  image_size: 512x512
   lookahead_degree: 8
   num_nearest_neighbor: 1
   nn_mode: L2
@@ -73,7 +73,7 @@ train:
     delta: 1e-5
   n_splits: 1
 gen:
-  data_num: 60000
+  data_num: 6000
   batch_size: 1000
   log_dir: null
   num_channels: 3
