@@ -106,17 +106,27 @@ class PE_Select(DPMetric):
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-4"
         generation_dataloader5 = self._image_generation(save_dir, max_images=gen_num)
 
-        public_features, public_labels = self._prepare_public_features([generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5])
+        self.public_model.model_id = "SG161222/Realistic_Vision_V5.1_noVAE"
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-5"
+        generation_dataloader6 = self._image_generation(save_dir, max_images=gen_num)
+
+        self.public_model.model_id = "Nihirc/Prompt2MedImage"
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-6"
+        generation_dataloader7 = self._image_generation(save_dir, max_images=gen_num)
+
+        public_features, public_labels = self._prepare_public_features([generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5, generation_dataloader6, generation_dataloader7])
 
         model_names = [
             "stable-diffusion-v1-5",
             "stable-diffusion-2-1-base",
             "stable-diffusion-v1-4",
             "stable-diffusion-2-base",
+            'Realistic-Vision-V5.1',
+            "Prompt2MedImage",
             "dpimagebench-ldm"
         ]
 
-        voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 5, sensitive_features, sensitive_labels, None)
+        voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 7, sensitive_features, sensitive_labels, None)
 
         # Print detailed voting results for round 0
         print(f"\n{'='*80}")
@@ -131,7 +141,7 @@ class PE_Select(DPMetric):
             f.write(f"Round 0: {str(voting_results)}\n")
 
         # print(voting_results_detail)
-        generation_loader_list = [generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5]
+        generation_loader_list = [generation_dataloader1, generation_dataloader2, generation_dataloader3, generation_dataloader4, generation_dataloader5, generation_dataloader6, generation_dataloader7]
 
         for var_step in range(var_time):
 
@@ -139,7 +149,7 @@ class PE_Select(DPMetric):
 
             public_features, public_labels = self._prepare_public_features(generation_loader_list)
 
-            voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 5, sensitive_features, sensitive_labels, None)
+            voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 7, sensitive_features, sensitive_labels, None)
 
             # Print detailed voting results for each variation round
             print(f"\n{'='*80}")

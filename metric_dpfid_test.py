@@ -11,11 +11,12 @@ MODELS = [
     'stable-diffusion-v1-5',
     'stable-diffusion-v1-4',
     'stable-diffusion-2-base',
-    'dpimagebench-ldm'
-]
+    'realistic-vision-v5.1',
+    'prompt2med-image',
+    ]
 METRIC = 'DPFID'
 OUTPUT_DIR = 'exp'
-OUTPUT_FILE = 'all_dpfid_result.txt'
+OUTPUT_FILE = 'all_dpfid_withdp_result.txt'
 
 def run_dpfid_for_combination(dataset_name, model_name):
     """Run DP-FID evaluation for a single dataset-model combination."""

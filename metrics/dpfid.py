@@ -14,7 +14,7 @@ import math
 
 class DPFID(DPMetric):
 
-    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=15.0):
+    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=10.0):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
         # Load Inception V3 and replace fc layer with Identity to get 2048-dim pool features
@@ -67,13 +67,6 @@ class DPFID(DPMetric):
 
         return features
 
-    def _add_gaussian_noise(self, data, sensitivity):
-        # Using noise multiplier (similar to pe_select.py)
-        # Noise std = sensitivity * noise_multiplier
-        sigma = sensitivity * self.noise_multiplier
-        noise = np.random.normal(0, sigma, size=data.shape)
-        return data + noise
-
     def _get_inception_features(self, images, is_tensor=True, batch_size=64, apply_clipping=False):
         features = []
 
@@ -94,7 +87,7 @@ class DPFID(DPMetric):
 
         return features
 
-    def _calculate_fid(self, real_features, generated_features, apply_dp=False):
+    def _calculate_fid(self, real_features, generated_features, apply_dp=True):
         # n1: actual number of samples used in computation (may be less than dataset_size due to max_images)
         # Sensitivity is computed based on n1, not dataset_size, because it depends on actual samples used
         n1 = real_features.shape[0]
@@ -182,7 +175,7 @@ class DPFID(DPMetric):
         eigvals[eigvals < 0] = 0  # Zero out negative eigenvalues
         return eigvecs @ np.diag(eigvals) @ eigvecs.T
 
-    def cal_metric(self, args, apply_dp=False):
+    def cal_metric(self, args, apply_dp=True):
         print("🚀 Starting DP-FID calculation...")
         print(f"🔒 DP parameters:")
         print(f"   Noise multiplier (σ): {self.noise_multiplier}")
@@ -194,12 +187,11 @@ class DPFID(DPMetric):
 
         # Generate variations
         original_dataloader, variations_dataloader = self._image_variation(
-            self.sensitive_dataset, save_dir, max_images=self.dataset_size
+            self.sensitive_dataset, save_dir, max_images=50000
         )
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations: {len(variations_dataloader.dataset)}")
 
         print("🔍 Extracting Inception V3 features...")
-        # Apply clipping to sensitive/original dataset features for DP
         # Noise will be added at statistic level (mean and covariance)
         real_features = self._get_inception_features(
             original_dataloader, is_tensor=True, apply_clipping=apply_dp
