@@ -12,11 +12,13 @@ MODELS = [
     'stable-diffusion-v1-4',
     'stable-diffusion-2-base',
     'realistic-vision-v5.1',
-    'prompt2med-image',
+    'realistic-vision-v6.0',
+    'prompt2med',
     ]
+
 METRIC = 'DPFID'
 OUTPUT_DIR = 'exp'
-OUTPUT_FILE = 'all_dpfid_withdp_clipnorm15_result.txt'
+OUTPUT_FILE = 'all_dpfid_nondp_result.txt'
 
 def run_dpfid_for_combination(dataset_name, model_name):
     """Run DP-FID evaluation for a single dataset-model combination."""
@@ -29,7 +31,8 @@ def run_dpfid_for_combination(dataset_name, model_name):
         'python', 'run_metric.py',
         '-m', METRIC,
         '-pm', model_name,
-        '-sd', dataset_name
+        '-sd', dataset_name,
+        '--non_DP'
     ]
 
     print(f"Running command: {' '.join(cmd)}\n")

@@ -33,7 +33,6 @@ class DPFID(DPMetric):
     def _preprocess_images(self, images, is_tensor=True):
         """
         Prepares images for InceptionV3.
-        Outputs a tensor in [0, 1] range. InceptionV3(transform_input=True) handles the rest.
         """
         if is_tensor:
             # Handle diffusion model outputs (often in [-1, 1])
@@ -59,7 +58,7 @@ class DPFID(DPMetric):
 
         return images.to(self.device)
 
-    def _get_inception_features(self, images, is_tensor=True, batch_size=64, apply_clipping=False):
+    def _get_inception_features(self, images, is_tensor=True, batch_size=64, apply_clipping=True):
 
         features = []
         with torch.no_grad():
@@ -74,6 +73,7 @@ class DPFID(DPMetric):
         features = np.concatenate(features, axis=0)
 
         # Apply clipping for private dataset features to ensure bounded sensitivity
+        print("   Applying feature clipping..." if apply_clipping else "   No feature clipping applied.")
         if apply_clipping:
             features = self._clip_features(features)
 
@@ -166,7 +166,8 @@ class DPFID(DPMetric):
         print(f"   Clipping bound (C): {self.clip_bound}")
         print(f"   Dataset size (n): {self.dataset_size}")
 
-        apply_dp=args.apply_DP
+        # Get apply_dp flag (note: non_DP uses store_false, so it's inverted)
+        apply_dp = args.non_DP
 
         time = self.get_time()
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"

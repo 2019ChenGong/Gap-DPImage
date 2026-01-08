@@ -8,9 +8,9 @@ python run.py setup.n_gpus_per_node=4 public_data.name=null model.ckpt=/p/fzv6en
 CUDA_VISIBLE_DEVICES=1 python eval.py -dn cifar10_32 -ep /p/fzv6enresearch/gap/exp/lora-cifar10-eps10
 
 # DP metrics
-python run_metric.py -m DPFID -pm stable-diffusion-2-1-base -sd cifar10
+python run_metric.py -m DPFID -pm stable-diffusion-2-1-base -sd cifar10 --non_DP
 
-python run_metric.py -m DPGAP -pm stable-diffusion-2-1-base -sd cifar10
+python run_metric.py -m DPGAP -pm stable-diffusion-2-1-base -sd cifar10 
 python run_metric.py -m DPGAP -pm dpimagebench-ldm -sd celeba
 
 python run_metric.py -m PE-Select -pm stable-diffusion-2-1-base -sd cifar10

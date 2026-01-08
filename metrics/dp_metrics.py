@@ -264,7 +264,7 @@ class DPMetric(object):
         self.epsilon = epsilon
         self.device = "cuda"
         self.max_images = 2000
-        self.variation_degree = 0.1
+        self.variation_degree = 0.3
         self.is_delete_variations = True
         self.dataloader_size = 16
 

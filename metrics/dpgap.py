@@ -131,7 +131,7 @@ class DPGAP(DPMetric):
             for (var_batch, _), (orig_batch, _) in zip(variations_dataloader, original_dataloader):
                 var_batch = var_batch.to(self.device)
                 orig_batch = orig_batch.to(self.device)
-                print(var_batch.shape, orig_batch.shape)
+                # print(var_batch.shape, orig_batch.shape)
                 var_out, orig_out = random_model(var_batch, orig_batch)
                 variant_outputs.append(var_out)
                 original_outputs.append(orig_out)
