@@ -13,63 +13,55 @@ import shutil
 import math
 
 class DPFID(DPMetric):
-
     def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=15.0):
-
         super().__init__(sensitive_dataset, public_model, epsilon)
-        # Load Inception V3 and replace fc layer with Identity to get 2048-dim pool features
-        inception = inception_v3(pretrained=True, transform_input=False).eval()
-        inception.fc = nn.Identity()  # Replace fc layer to output 2048-dim instead of 1000-dim
+        
+        # Load InceptionV3 with transform_input=True. 
+        # This automatically scales images from [0, 1] to [-1, 1] and applies standard normalization.
+        inception = inception_v3(pretrained=True, transform_input=True).eval()
+        inception.fc = nn.Identity() # Remove the classification head to get 2048-dim features
         self.inception_model = inception.to(self.device)
 
-        # DP parameters - using noise scale instead of privacy budget
-        self.noise_multiplier = noise_multiplier  # Noise scale (sigma)
-        self.clip_bound = clip_bound  # L2 norm clipping bound for features
+        self.noise_multiplier = noise_multiplier
+        self.clip_bound = clip_bound
 
         if hasattr(sensitive_dataset, 'dataset'):
             self.dataset_size = len(sensitive_dataset.dataset)
         else:
-            # Fallback: count batches (less accurate if drop_last=True)
             self.dataset_size = len(sensitive_dataset) * sensitive_dataset.batch_size
 
     def _preprocess_images(self, images, is_tensor=True):
+        """
+        Prepares images for InceptionV3.
+        Outputs a tensor in [0, 1] range. InceptionV3(transform_input=True) handles the rest.
+        """
         if is_tensor:
-            # Check if images are in [-1, 1] range (common for diffusion models)
-            # If so, convert to [0, 1] range for Inception V3
+            # Handle diffusion model outputs (often in [-1, 1])
             if images.min() < 0:
                 images = (images + 1) / 2
-            # Clip to [0, 1] to be safe
             images = torch.clamp(images, 0, 1)
-            # Resize to 299x299 for Inception V3
-            images = F.resize(images, (299, 299))
         else:
-            # Convert NumPy array from [0, 255] to [0, 1]
+            # Handle NumPy arrays in [0, 255]
             images = torch.from_numpy(images).float() / 255.0
-            # Resize to 299x299
-            images = F.resize(images.permute(0, 3, 1, 2), (299, 299))
+            images = images.permute(0, 3, 1, 2)
 
+        # Standard FID uses Bi-linear interpolation with Anti-aliasing
+        images = F.resize(
+            images, 
+            (299, 299), 
+            interpolation=F.InterpolationMode.BILINEAR, 
+            antialias=True
+        )
+
+        # Ensure 3 channels (RGB)
         if images.shape[1] != 3:
             images = images.repeat(1, 3, 1, 1)
 
         return images.to(self.device)
 
-    def _clip_features(self, features):
-        norms = np.linalg.norm(features, axis=1, keepdims=True)
-        clipping_mask = norms > self.clip_bound
-
-        # Debug info
-        num_clipped = clipping_mask.sum()
-        total_samples = len(features)
-
-        features = np.where(clipping_mask, features * (self.clip_bound / norms), features)
-
-        norms_after = np.linalg.norm(features, axis=1, keepdims=True)
-
-        return features
-
     def _get_inception_features(self, images, is_tensor=True, batch_size=64, apply_clipping=False):
-        features = []
 
+        features = []
         with torch.no_grad():
 
             for batch, _ in images:
@@ -87,107 +79,101 @@ class DPFID(DPMetric):
 
         return features
 
+    def _clip_features(self, features):
+
+        norms = np.linalg.norm(features, axis=1, keepdims=True)
+        clipping_mask = norms > self.clip_bound
+
+        # Debug info
+        num_clipped = clipping_mask.sum()
+        total_samples = len(features)
+
+        features = np.where(clipping_mask, features * (self.clip_bound / norms), features)
+
+        norms_after = np.linalg.norm(features, axis=1, keepdims=True)
+
+        return features
+
     def _calculate_fid(self, real_features, generated_features, apply_dp=True):
-        # n1: actual number of samples used in computation (may be less than dataset_size due to max_images)
-        # Sensitivity is computed based on n1, not dataset_size, because it depends on actual samples used
+        """
+        Calculates FID between two feature sets.
+        If apply_dp is True, adds Gaussian noise to the sufficient statistics.
+        """
         n1 = real_features.shape[0]
         n2 = generated_features.shape[0]
         feature_dim = real_features.shape[1]
 
-        # Compute mean of features
-        sum_real = np.sum(real_features, axis=0)
-        outer_product_real = real_features.T @ real_features
-        sum_gen = np.sum(generated_features, axis=0)
-        outer_product_gen = generated_features.T @ generated_features
-
         if apply_dp:
+            # Calculate sum and outer product for DP statistics
+            sum_real = np.sum(real_features, axis=0)
+            outer_product_real = real_features.T @ real_features
+            
+            # Usually, generated features are treated as non-private, but we process 
+            # them symmetrically here to maintain consistent bias if requested.
+            sum_gen = np.sum(generated_features, axis=0)
+            outer_product_gen = generated_features.T @ generated_features
 
-            # Add Gaussian noise to sum (will divide by n later to get mean)
-            # Both real and generated features need noise since variations come from sensitive data
+            # Add Gaussian noise to sums (Sensitivity = clip_bound)
             sum_noise_std = self.clip_bound * self.noise_multiplier
             sum_real += np.random.normal(0, sum_noise_std, size=sum_real.shape)
             sum_gen += np.random.normal(0, sum_noise_std, size=sum_gen.shape)
 
-            # Add Gaussian noise to outer product
-            # IMPORTANT: Use independent noise for real and generated features
-            outer_product_noise_std = (self.clip_bound ** 2) * self.noise_multiplier
+            # Add Gaussian noise to outer products (Sensitivity = clip_bound^2)
+            # We ensure the noise matrix is symmetric
+            op_noise_std = (self.clip_bound ** 2) * self.noise_multiplier
+            for op in [outer_product_real, outer_product_gen]:
+                noise = np.random.normal(0, op_noise_std, size=(feature_dim, feature_dim))
+                op += (noise + noise.T) / np.sqrt(2)
 
-            # Noise for real features
-            noise_matrix_real = np.random.normal(0, outer_product_noise_std, size=(feature_dim, feature_dim))
-            noise_matrix_real = (noise_matrix_real + noise_matrix_real.T) / np.sqrt(2)
-            outer_product_real += noise_matrix_real
-
-            # Independent noise for generated features
-            noise_matrix_gen = np.random.normal(0, outer_product_noise_std, size=(feature_dim, feature_dim))
-            noise_matrix_gen = (noise_matrix_gen + noise_matrix_gen.T) / np.sqrt(2)
-            outer_product_gen += noise_matrix_gen
-
-            mu1 = sum_real / n1
-            mu2 = sum_gen / n2
-
+            # Derive mean and covariance from noisy statistics
+            mu1, mu2 = sum_real / n1, sum_gen / n2
             sigma1 = (outer_product_real / n1) - np.outer(mu1, mu1)
             sigma2 = (outer_product_gen / n2) - np.outer(mu2, mu2)
-
-            print(f"      Sum noise std (per dim): {sum_noise_std:.6f}")
-            print(f"      Outer product noise std: {outer_product_noise_std:.6f}")
-
-            # But we keep it for safety in case of numerical errors
-            eigvals_before_sigma1 = np.linalg.eigvalsh(sigma1)
-            eigvals_before_sigma2 = np.linalg.eigvalsh(sigma2)
-
-            if (eigvals_before_sigma1 < 1e-10).any():
-                print(f"      Warning: sigma1 has negative eigenvalues, applying _make_psd")
-                sigma1 = self._make_psd(sigma1)
-            if (eigvals_before_sigma2 < 1e-10).any():
-                print(f"      Warning: sigma2 has negative eigenvalues, applying _make_psd")
-                sigma2 = self._make_psd(sigma2)
+            
+            # Ensure matrices are Positive Semi-Definite after adding noise
+            sigma1 = self._make_psd(sigma1)
+            sigma2 = self._make_psd(sigma2)
         else:
+            # Standard FID calculation using biased covariance (ddof=0)
             mu1 = np.mean(real_features, axis=0)
             mu2 = np.mean(generated_features, axis=0)
+            sigma1 = np.cov(real_features, rowvar=False, ddof=0)
+            sigma2 = np.cov(generated_features, rowvar=False, ddof=0)
 
-            sigma1 = np.cov(real_features, rowvar=False)
-            sigma2 = np.cov(generated_features, rowvar=False)
-
-        # Compute FID using standard formula
+        # Squared L2 distance between means
         diff = mu1 - mu2
-        m = np.square(diff).sum()  # Squared L2 distance between means
-
-        print(f"\n   📊 FID components:")
-        print(f"      Mean difference (||μ1-μ2||²): {m:.4f}")
-        print(f"      Trace(Σ1): {np.trace(sigma1):.4f}")
-        print(f"      Trace(Σ2): {np.trace(sigma2):.4f}")
-
-        # Compute matrix square root of sigma1 @ sigma2
+        
+        # Matrix square root of the product of covariances
         covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+        
+        # Handle numerical errors resulting in complex numbers
+        if np.iscomplexobj(covmean):
+            covmean = covmean.real
 
-        trace_covmean = np.trace(covmean)
-        print(f"      Trace(√(Σ1·Σ2)): {np.real(trace_covmean):.4f}")
-
-        # Calculate FID and ensure it's real-valued
-        fid = np.real(m + np.trace(sigma1 + sigma2 - 2 * covmean))
-
-        print(f"      Final FID = {m:.4f} + {np.trace(sigma1):.4f} + {np.trace(sigma2):.4f} - 2×{np.real(trace_covmean):.4f}")
-
-        return fid
+        # Final FID formula: ||mu1 - mu2||^2 + Tr(sigma1 + sigma2 - 2*sqrt(sigma1*sigma2))
+        fid = diff.dot(diff) + np.trace(sigma1 + sigma2 - 2 * covmean)
+        return float(fid)
 
     def _make_psd(self, matrix):
         eigvals, eigvecs = np.linalg.eigh(matrix)
         eigvals[eigvals < 0] = 0  # Zero out negative eigenvalues
         return eigvecs @ np.diag(eigvals) @ eigvecs.T
 
-    def cal_metric(self, args, apply_dp=True):
+    def cal_metric(self, args):
         print("🚀 Starting DP-FID calculation...")
         print(f"🔒 DP parameters:")
         print(f"   Noise multiplier (σ): {self.noise_multiplier}")
         print(f"   Clipping bound (C): {self.clip_bound}")
         print(f"   Dataset size (n): {self.dataset_size}")
 
+        apply_dp=args.apply_DP
+
         time = self.get_time()
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
         # Generate variations
         original_dataloader, variations_dataloader = self._image_variation(
-            self.sensitive_dataset, save_dir, max_images=50000
+            self.sensitive_dataset, save_dir, max_images=self.max_images
         )
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations: {len(variations_dataloader.dataset)}")
 
