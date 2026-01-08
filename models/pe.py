@@ -186,7 +186,7 @@ class PE(DPSynther):
             assert samples.shape[0] % private_num_classes == 0
             num_samples_per_class = samples.shape[0] // private_num_classes
 
-            if t == len(config.num_samples_schedule) - 1:
+            if t == len(config.num_samples_schedule) - 1 and False:
                 samples = np.concatenate([samples, original_samples[:, 0]], axis=0)
                 labels = [np.array([class_i] * num_samples_per_class) for class_i, class_ in enumerate(private_classes)]
                 labels.append(additional_info)
@@ -360,7 +360,7 @@ class PE(DPSynther):
                     packed_samples=packed_samples[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
                     count=count[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
                     folder=f'{config.log_dir}/samples',
-                    suffix=f'class{class_}'
+                    suffix=f'class{class_}_iter{t}'
                 )
 
             # Generate new indices based on the computed histograms
@@ -392,13 +392,13 @@ class PE(DPSynther):
             samples = np.squeeze(samples, axis=1)
 
             # Log the final samples if this is the last iteration
-            if t == len(config.num_samples_schedule) - 1:
-                log_samples(
-                    samples=samples,
-                    additional_info=additional_info,
-                    folder=f'{config.log_dir}/{t}',
-                    plot_images=False
-                )
+            # if t == len(config.num_samples_schedule) - 1:
+            #     log_samples(
+            #         samples=samples,
+            #         additional_info=additional_info,
+            #         folder=f'{config.log_dir}/{t}',
+            #         plot_images=False
+            #     )
 
         # Store the final samples and labels
         self.samples = np.transpose(samples.astype('float'), (0, 3, 1, 2)) / 255.

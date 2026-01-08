@@ -102,11 +102,11 @@ class PE_Select(DPMetric):
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-3"
         generation_dataloader4 = self._image_generation(save_dir, max_images=gen_num)
 
-        self.public_model = load_public_model("dpimagebench-ldm")
-        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-4"
+        self.public_model.model_id = "SG161222/Realistic_Vision_V5.1_noVAE"
+        save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-5"
         generation_dataloader5 = self._image_generation(save_dir, max_images=gen_num)
 
-        self.public_model.model_id = "SG161222/Realistic_Vision_V5.1_noVAE"
+        self.public_model.model_id = "SG161222/Realistic_Vision_V6.0_B1_noVAE"
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}-5"
         generation_dataloader6 = self._image_generation(save_dir, max_images=gen_num)
 
@@ -121,9 +121,9 @@ class PE_Select(DPMetric):
             "stable-diffusion-2-1-base",
             "stable-diffusion-v1-4",
             "stable-diffusion-2-base",
-            'Realistic-Vision-V5.1',
-            "Prompt2MedImage",
-            "dpimagebench-ldm"
+            'realistic-vision-v5.1',
+            'realistic-vision-v6.0',
+            'prompt2med'
         ]
 
         voting_results, voting_results_detail = self.pe_vote(public_features, public_labels, 7, sensitive_features, sensitive_labels, None)

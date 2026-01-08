@@ -557,7 +557,9 @@ def get_prompt(data_name: str):
     
     elif data_name.startswith("camelyon"):
         return ["A normal lymph node image", "A lymph node histopathology image"]
-    else:
-        return [""]
+    elif data_name.startswith("octmnist"):
+        return ["An optical coherence tomography (OCT) images for retinal disease 1", "An optical coherence tomography (OCT) images for retinal disease 2", "An optical coherence tomography (OCT) images for retinal disease 3", "An optical coherence tomography (OCT) images for retinal disease 4"]
     # else:
-    #     raise NotImplementedError
+    #     return [""]
+    else:
+        raise NotImplementedError

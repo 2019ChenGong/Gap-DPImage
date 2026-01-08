@@ -10,48 +10,49 @@ setup:
   workdir: exp/pe/mnist_28_eps1.0
 public_data:
   name: null
-  train_path: dataset/dpimagebench/imagenet_128
 sensitive_data:
-  name: celeba_male_128
-  num_channels: 3
+  name: octmnist
+  num_channels: 1
   resolution: 128
-  n_classes: 2
-  train_path: dataset/celeba/train_128_Male.zip
-  test_path: dataset/celeba/test_128_Male.zip
-  fid_stats: dataset/celeba/fid_stats_128.npz
+  n_classes: 4
+  train_path: dataset/octmnist/train_128.zip
+  test_path: dataset/octmnist/test_128.zip
+  fid_stats: dataset/octmnist/fid_stats_128.npz
 model:
-  api: guided_diffusion
+  api: improved_diffusion
   feature_extractor: inception_v3
   api_params:
-    model_image_size: 256
-    num_channels: 256
-    num_heads: 4
-    num_res_blocks: 2
-    resblock_updown: true
+    model_image_size: 64
+    num_channels: 192
+    num_res_blocks: 3
     learn_sigma: true
     class_cond: true
-    diffusion_steps: 1000
-    noise_schedule: linear
-    use_scale_shift_norm: true
+    diffusion_steps: 4000
+    noise_schedule: cosine
     rescale_learned_sigmas: false
     rescale_timesteps: false
     use_ddim: true
-    attention_resolutions: 32,16,8
-    timestep_respacing: 50
-    batch_size: 500
-    model_path: models/pretrained_models/128x128_diffusion.pt
-  private_num_classes: 2
+    timestep_respacing: 10
+    batch_size: 2000
+    model_path: models/pretrained_models/imagenet64_cond_270M_250K.pt
+  private_num_classes: 10
   public_num_classes: 1000
   ckpt: null
 pretrain:
   log_dir: null
   cond: true
 train:
-  batch_size: 500
+  batch_size: 2000
   feature_extractor_batch_size: 500
   private_image_size: 128
-  private_num_classes: 2
+  private_num_classes: 10
   num_samples_schedule:
+  - 6000
+  - 6000
+  - 6000
+  - 6000
+  - 6000
+  - 6000
   - 6000
   - 6000
   - 6000
@@ -60,29 +61,35 @@ train:
   - 6000
   variation_degree_schedule:
   - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
   - 2
-  - 4
-  - 6
-  - 8
-  - 10
+  - 2
+  - 2
+  - 2
   initial_prompt: null
-  image_size: 256x256
+  image_size: 512x512
   lookahead_degree: 8
   num_nearest_neighbor: 1
   nn_mode: L2
-  count_threshold: 2.0
+  count_threshold: 3.0
   log_dir: null
-  tmp_folder: dataset/celeba/pe_tmp
+  tmp_folder: dataset/mnist/pe_tmp
   dp:
     epsilon: 10.0
     delta: 1e-5
   n_splits: 1
 gen:
-  data_num: 1000
+  data_num: 6000
   batch_size: 1000
   log_dir: null
-  num_channels: 3
-  resolution: 256
+  num_channels: 1
+  resolution: 128
 eval:
   batch_size: 1000
   mode: val
