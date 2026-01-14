@@ -61,7 +61,7 @@ train:
   - 8
   - 10
   initial_prompt: null
-  image_size: 512x512
+  image_size: 64x64
   lookahead_degree: 8
   num_nearest_neighbor: 1
   nn_mode: L2

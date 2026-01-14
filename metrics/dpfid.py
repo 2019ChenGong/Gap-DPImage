@@ -13,7 +13,7 @@ import shutil
 import math
 
 class DPFID(DPMetric):
-    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=15.0):
+    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=10.0):
         super().__init__(sensitive_dataset, public_model, epsilon)
         
         # Load InceptionV3 with transform_input=True. 
@@ -173,8 +173,11 @@ class DPFID(DPMetric):
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
         # Generate variations
+        # original_dataloader, variations_dataloader = self._image_variation(
+        #     self.sensitive_dataset, save_dir, max_images=self.max_images
+        # )
         original_dataloader, variations_dataloader = self._image_variation(
-            self.sensitive_dataset, save_dir, max_images=self.max_images
+            self.sensitive_dataset, save_dir, max_images=50000
         )
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations: {len(variations_dataloader.dataset)}")
 

@@ -13,17 +13,7 @@ import shutil
 class DPPrecision(DPMetric):
 
     def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=20.0, k=3):
-        """
-        DP-Precision: Differentially private precision metric for generative models.
 
-        Args:
-            sensitive_dataset: The private dataset
-            public_model: The generative model to evaluate
-            epsilon: Privacy budget
-            noise_multiplier: Gaussian noise multiplier (σ)
-            clip_bound: L2 norm clipping bound for features
-            k: Number of nearest neighbors to consider (default: 3)
-        """
         super().__init__(sensitive_dataset, public_model, epsilon)
         # Load Inception V3 and replace fc layer with Identity to get 2048-dim pool features
         inception = inception_v3(pretrained=True, transform_input=False).eval()
@@ -107,15 +97,7 @@ class DPPrecision(DPMetric):
         return features
 
     def _calculate_precision(self, real_features, generated_features, apply_dp=False):
-        """
-        Calculate Precision: For each generated sample, check if there's a similar real sample.
-
-        Precision = (# of generated samples with at least one close real neighbor) / (# of generated samples)
-
-        IMPORTANT: For DP-Precision, we need to protect the real data.
-        The query "find k-NN in real data" reveals information about real data.
-        We add noise to the threshold calculation instead of the count.
-        """
+        
         n_real = real_features.shape[0]
         n_gen = generated_features.shape[0]
 

@@ -18,7 +18,7 @@ MODELS = [
 
 METRIC = 'DPFID'
 OUTPUT_DIR = 'exp'
-OUTPUT_FILE = 'all_dpfid_nondp_result.txt'
+OUTPUT_FILE = 'all_dpfid_dpclipping10_result.txt'
 
 def run_dpfid_for_combination(dataset_name, model_name):
     """Run DP-FID evaluation for a single dataset-model combination."""

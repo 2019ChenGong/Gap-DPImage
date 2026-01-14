@@ -1,6 +1,7 @@
 from metrics.dpfid import DPFID
 from metrics.dpgap import DPGAP
 from metrics.pe_select import PE_Select
+from metrics.dpprecision import DPPrecision
 
 def load_metrics(metrics_name, sensitive_dataset, public_model, epsilon):
 
@@ -10,6 +11,8 @@ def load_metrics(metrics_name, sensitive_dataset, public_model, epsilon):
         metrics_model = DPGAP(sensitive_dataset, public_model, epsilon)
     elif metrics_name == "PE-Select":
         metrics_model = PE_Select(sensitive_dataset, public_model, epsilon)
+    elif metrics_name == "DP-Precision":
+        metrics_model = DPPrecision(sensitive_dataset, public_model, epsilon)
     else:
         print(f"Error: '{metrics_name}' is not a valid measure method.")
         return

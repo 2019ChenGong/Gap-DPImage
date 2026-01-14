@@ -16,6 +16,7 @@ from models.PE.pe.dp_counter import dp_nn_histogram
 from models.PE.pe.arg_utils import str2bool
 from models.PE.apis import get_api_class_from_name
 import torch.nn.functional as F
+from fld.metrics.FID import FID
 
 import logging
 
@@ -78,7 +79,7 @@ class PE(DPSynther):
         self.api_params = config.api_params
 
 
-    def train(self, sensitive_dataloader, config):
+    def train_(self, sensitive_dataloader, config):
         # Create a directory to store logs
         os.makedirs(config.log_dir, exist_ok=True)
         tmp_folder = config.tmp_folder
@@ -118,6 +119,7 @@ class PE(DPSynther):
         # Get unique classes and their count
         private_classes = list(sorted(set(list(all_private_labels))))
         private_num_classes = len(private_classes)
+        print(private_classes)
 
         # Log the start of feature extraction
         logging.info('Extracting features')
@@ -391,26 +393,195 @@ class PE(DPSynther):
             )
             samples = np.squeeze(samples, axis=1)
 
-            # Log the final samples if this is the last iteration
-            # if t == len(config.num_samples_schedule) - 1:
-            #     log_samples(
-            #         samples=samples,
-            #         additional_info=additional_info,
-            #         folder=f'{config.log_dir}/{t}',
-            #         plot_images=False
-            #     )
-
         # Store the final samples and labels
         self.samples = np.transpose(samples.astype('float'), (0, 3, 1, 2)) / 255.
         self.labels = np.concatenate([[cls] * num_samples_per_class for cls in private_classes])
 
+    def train(self, sensitive_dataloader, config):
+        # Create a directory to store logs
+        os.mkdir(config.log_dir)
+        tmp_folder = config.tmp_folder
 
+        # Calculate the noise multiplier for differential privacy
+        self.noise_factor = get_noise_multiplier(
+            epsilon=config.dp.epsilon, 
+            delta=config.dp.delta, 
+            num_steps=len(config.num_samples_schedule) - 1
+        )
+
+        # Log the calculated noise factor
+        logging.info("The noise factor is {}".format(self.noise_factor))
+
+        # Initialize lists to store private samples and labels
+        all_private_samples = []
+        all_private_labels = []
+
+        # Iterate over the sensitive data loader to collect samples and labels
+        for x, y in sensitive_dataloader:
+            if len(y.shape) == 2:
+                # Normalize pixel values and convert one-hot labels to class indices
+                x = x.to(torch.float32) / 255.
+                y = torch.argmax(y, dim=1)
+            if x.shape[1] == 1:
+                # Convert grayscale images to RGB
+                x = x.repeat(1, 3, 1, 1)
+            all_private_samples.append(x.cpu().numpy())
+            all_private_labels.append(y.cpu().numpy())
+
+        # Concatenate all collected samples and labels
+        all_private_samples = np.concatenate(all_private_samples)
+        all_private_labels = np.concatenate(all_private_labels)
+
+        # Clip and round the pixel values to ensure they are within the valid range
+        all_private_samples = np.around(np.clip(all_private_samples * 255, a_min=0, a_max=255)).astype(np.uint8)
+        all_private_samples = np.transpose(all_private_samples, (0, 2, 3, 1))
+
+        # Get unique classes and their count
+        private_classes = list(sorted(set(list(all_private_labels))))
+        private_num_classes = len(private_classes)
+
+        # Log the start of feature extraction
+        logging.info('Extracting features')
+        all_private_features = extract_features(
+            data=all_private_samples,
+            tmp_folder=tmp_folder,
+            model_name=self.feature_extractor,
+            num_workers=2,
+            res=config.private_image_size,
+            batch_size=config.feature_extractor_batch_size,
+        )
+        logging.info(f'all_private_features.shape: {all_private_features.shape}')
+
+        # Log the start of generating initial samples
+        logging.info('Generating initial samples')
+        labels = None
+
+        # Generate initial samples using the API
+        samples, additional_info = self.api.image_random_sampling(
+            prompts=config.initial_prompt,
+            num_samples=config.num_samples_schedule[0],
+            size=config.image_size,
+            labels=labels
+        )
+
+        start_t = 1
+
+        # Main training loop
+        for t in range(start_t, len(config.num_samples_schedule[:2])):
+            logging.info(f't={t}')
+            assert samples.shape[0] % private_num_classes == 0
+            num_samples_per_class = samples.shape[0] // private_num_classes
+
+            if config.lookahead_degree == 0:
+                # If no lookahead, expand dimensions of samples
+                packed_samples = np.expand_dims(samples, axis=1)
+            else:
+                # Perform image variation to generate multiple variations per sample
+                logging.info('Running image variation')
+                packed_samples = self.api.image_variation(
+                    images=samples,
+                    additional_info=additional_info,
+                    num_variations_per_image=config.lookahead_degree,
+                    size=config.image_size,
+                    variation_degree=config.variation_degree_schedule[t]
+                )
+
+            # Extract features from the generated samples
+            packed_features = []
+            logging.info('Running feature extraction')
+            for i in range(packed_samples.shape[1]):
+                sub_packed_features = extract_features(
+                    data=packed_samples[:, i],
+                    tmp_folder=tmp_folder,
+                    num_workers=2,
+                    model_name=self.feature_extractor,
+                    res=config.private_image_size,
+                    batch_size=config.feature_extractor_batch_size
+                )
+                logging.info(f'sub_packed_features.shape: {sub_packed_features.shape}')
+                packed_features.append(sub_packed_features)
+            packed_features = np.mean(packed_features, axis=0)
+
+            # Compute histograms for each class
+            logging.info('Computing histogram')
+            count = []
+            for class_i in range(private_num_classes):
+                sub_count, sub_clean_count = dp_nn_histogram(
+                    public_features=packed_features[
+                        num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
+                    private_features=all_private_features[all_private_labels == class_i],
+                    noise_multiplier=self.noise_factor,
+                    num_nearest_neighbor=config.num_nearest_neighbor,
+                    mode=config.nn_mode,
+                    threshold=config.count_threshold
+                )
+                # log_count(
+                #     sub_count,
+                #     sub_clean_count,
+                #     f'{config.log_dir}/{t}/count_class{class_}.npz'
+                # )
+                count.append(sub_count)
+            count = np.concatenate(count)
+
+            # Visualize the results for each class
+            for class_i in range(private_num_classes):
+                visualize(
+                    samples=samples[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
+                    packed_samples=packed_samples[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
+                    count=count[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
+                    folder=f'{config.log_dir}/samples',
+                    suffix=f'class{class_i}_iter{t}'
+                )
+
+            # Generate new indices based on the computed histograms
+            logging.info('Generating new indices')
+            assert config.num_samples_schedule[t] % config.private_num_classes == 0
+            new_num_samples_per_class = config.num_samples_schedule[t] // config.private_num_classes
+            new_indices = []
+            for class_i in range(private_num_classes):
+                sub_count = count[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)]
+                sub_new_indices = np.random.choice(
+                    np.arange(num_samples_per_class * class_i, num_samples_per_class * (class_i + 1)),
+                    size=new_num_samples_per_class,
+                    p=sub_count / np.sum(sub_count)
+                )
+                new_indices.append(sub_new_indices)
+            new_indices = np.concatenate(new_indices)
+            new_samples = samples[new_indices]
+            additional_info = additional_info[new_indices]
+
+            # Generate new samples based on the selected indices
+            logging.info('Generating new samples')
+            samples = self.api.image_variation(
+                images=new_samples,
+                additional_info=additional_info,
+                num_variations_per_image=1,
+                size=config.image_size,
+                variation_degree=config.variation_degree_schedule[t]
+            )
+            samples = np.squeeze(samples, axis=1)
+
+            packed_features = extract_features(
+                    data=samples,
+                    tmp_folder=tmp_folder,
+                    num_workers=2,
+                    model_name=self.feature_extractor,
+                    res=config.private_image_size,
+                    batch_size=config.feature_extractor_batch_size
+                )
+            fid = FID().compute_metric(torch.Tensor(all_private_features), None, torch.Tensor(packed_features))
+            logging.info("current fid: {}".format(fid))
+
+        # Store the final samples and labels
+        self.samples = np.transpose(samples.astype('float'), (0, 3, 1, 2)) / 255.
+        self.labels = np.concatenate([[class_i] * num_samples_per_class for class_i in range(private_num_classes)])
+    
     def generate(self, config):
         # Create a directory to store logs and generated data
         os.mkdir(config.log_dir)
         
         # Interpolate the sample data to the specified resolution and convert it back to numpy array
-        syn_data = F.interpolate(torch.from_numpy(self.samples), size=[config.resolution, config.resolution]).numpy()
+        syn_data = F.interpolate(torch.from_numpy(self.samples), size=[config.resolution, config.resolution], mode="bicubic", antialias=True).numpy()
         
         # Assign the labels for the synthetic data
         syn_labels = self.labels
