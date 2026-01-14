@@ -42,21 +42,28 @@ class DPPrecision(DPMetric):
             self.dataset_size = len(sensitive_dataset) * sensitive_dataset.batch_size
 
     def _preprocess_images(self, images, is_tensor=True):
+        """
+        Prepares images for InceptionV3.
+        """
         if is_tensor:
-            # Check if images are in [-1, 1] range (common for diffusion models)
-            # If so, convert to [0, 1] range for Inception V3
+            # Handle diffusion model outputs (often in [-1, 1])
             if images.min() < 0:
                 images = (images + 1) / 2
-            # Clip to [0, 1] to be safe
             images = torch.clamp(images, 0, 1)
-            # Resize to 299x299 for Inception V3
-            images = F.resize(images, (299, 299))
         else:
-            # Convert NumPy array from [0, 255] to [0, 1]
+            # Handle NumPy arrays in [0, 255]
             images = torch.from_numpy(images).float() / 255.0
-            # Resize to 299x299
-            images = F.resize(images.permute(0, 3, 1, 2), (299, 299))
+            images = images.permute(0, 3, 1, 2)
 
+        # Standard FID uses Bi-linear interpolation with Anti-aliasing
+        images = F.resize(
+            images, 
+            (299, 299), 
+            interpolation=F.InterpolationMode.BILINEAR, 
+            antialias=True
+        )
+
+        # Ensure 3 channels (RGB)
         if images.shape[1] != 3:
             images = images.repeat(1, 3, 1, 1)
 

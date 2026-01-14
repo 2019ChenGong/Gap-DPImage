@@ -32,7 +32,6 @@ def run_dpfid_for_combination(dataset_name, model_name):
         '-m', METRIC,
         '-pm', model_name,
         '-sd', dataset_name,
-        '--non_DP'
     ]
 
     print(f"Running command: {' '.join(cmd)}\n")
