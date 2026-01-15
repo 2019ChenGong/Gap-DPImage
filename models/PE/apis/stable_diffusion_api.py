@@ -1,3 +1,6 @@
+from models.PE.pe.pytorch_utils import dev
+
+
 import torch
 import torchvision.transforms as T
 from PIL import Image
@@ -5,7 +8,6 @@ import numpy as np
 from tqdm import tqdm
 from diffusers import StableDiffusionPipeline
 from diffusers import StableDiffusionImg2ImgPipeline
-from improved_diffusion import dist_util
 from concurrent.futures import ThreadPoolExecutor, wait, as_completed
 from concurrent.futures import ProcessPoolExecutor
 import threading
@@ -133,6 +135,16 @@ def generate_multigpu(
     # print(results[0][0].shape, results[1][0].shape, results[2][0].shape)
     all_images = np.concatenate([r[0] for r in results], axis=0)
     all_prompts = np.concatenate([r[1] for r in results], axis=0)
+
+    rng = np.random.default_rng(seed=42)  # 你可以替换成任意整数，或传入 None 用系统熵
+
+    # 生成打乱索引
+    indices = rng.permutation(len(all_images))
+
+    # 用相同索引打乱两个数组
+    all_images = all_images[indices]
+    all_prompts = all_prompts[indices]
+
     return all_images, all_prompts
 
 def _run_image_variation_on_device(args):
@@ -162,6 +174,34 @@ def _run_image_variation_on_device(args):
 
     variations = []
     num_iters = int(np.ceil(len(images) / max_batch_size))
+
+    for _ in tqdm(range(num_variations_per_image)):
+        sub_variations = []
+        for i in range(num_iters):
+            start = i * max_batch_size
+            end = min((i + 1) * max_batch_size, len(images))
+            batch_images = images[start:end]
+            batch_prompts = prompts[start:end]
+
+            with torch.no_grad():
+                out = pipe(
+                    prompt=batch_prompts,
+                    image=batch_images.to(device, dtype=torch.float16),
+                    num_inference_steps=num_inference_steps,
+                    strength=variation_degree,
+                    guidance_scale=guidance_scale,
+                    num_images_per_prompt=1,
+                    output_type='np'
+                ).images
+            sub_variations.append(out)
+        sub_variations = np.concatenate(sub_variations, axis=0)
+        
+        variations.append(sub_variations)
+    variations = np.stack(variations, axis=1)
+    torch.cuda.empty_cache()
+    del pipe
+    return _round_to_uint8(variations), gpu_id
+
     for i in range(num_iters):
         start = i * max_batch_size
         end = min((i + 1) * max_batch_size, len(images))
@@ -449,7 +489,9 @@ class StableDiffusionAPI(API):
             futures = [executor.submit(_run_image_variation_on_device, task) for task in task_list]
             chunk_results = []
             for future in tqdm(futures, total=len(futures), desc="Generating variations"):
-                chunk_results.append(future.result())
+                res = future.result()
+                print(res[1])
+                chunk_results.append(res[0])
 
         # chunk_results[i] shape: (chunk_size_i, num_variations_per_image, C, H, W)
         # 合并所有 chunk
@@ -479,7 +521,7 @@ class StableDiffusionAPI(API):
                 [0.5, 0.5, 0.5])])
         images = [variation_transform(Image.fromarray(im))
                   for im in images]
-        images = torch.stack(images).to(dist_util.dev())
+        images = torch.stack(images).to(dev())
         max_batch_size = self._variation_batch_size
         variations = []
         num_iterations = int(np.ceil(

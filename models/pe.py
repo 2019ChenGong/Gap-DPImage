@@ -467,7 +467,7 @@ class PE(DPSynther):
         start_t = 1
 
         # Main training loop
-        for t in range(start_t, len(config.num_samples_schedule[:2])):
+        for t in range(start_t, len(config.num_samples_schedule)):
             logging.info(f't={t}')
             assert samples.shape[0] % private_num_classes == 0
             num_samples_per_class = samples.shape[0] // private_num_classes

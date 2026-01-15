@@ -7,7 +7,7 @@ import numpy as np
 import os
 from torch.multiprocessing import spawn
 import argparse
-from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, DDIMScheduler
 from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
@@ -37,6 +37,7 @@ def image_variation_batch(rank, dataloader, args):
     os.makedirs(rank_save_dir_variation, exist_ok=True)
     os.makedirs(rank_save_dir_original, exist_ok=True)
     model = StableDiffusionImg2ImgPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+    model.scheduler = DDIMScheduler.from_config(model.scheduler.config)
     model = model.to(device)
     model.safety_checker = None
     model.requires_safety_checker = False
@@ -100,6 +101,7 @@ def image_generation_batch(rank, args):
     rank_save_dir_variation = os.path.join(variation_save_dir, f"rank_{rank}")
     os.makedirs(rank_save_dir_variation, exist_ok=True)
     model = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+    model.scheduler = DDIMScheduler.from_config(model.scheduler.config)
     model = model.to(device)
     model.safety_checker = None
     model.requires_safety_checker = False

@@ -3,7 +3,7 @@ import random
 from torch.utils.data import random_split, TensorDataset, Dataset, DataLoader, ConcatDataset
 from data.stylegan3.dataset import ImageFolderDataset
 from models.DP_LDM.ldm.util import instantiate_from_config
-from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, DDIMScheduler
 from omegaconf import OmegaConf
 
 import os
@@ -107,5 +107,6 @@ def load_public_model(public_model):
     else:
         print(f"Error: '{public_model}' is not a valid public model.")
         return
+    model.scheduler = DDIMScheduler.from_config(model.scheduler.config)
     
     return model
