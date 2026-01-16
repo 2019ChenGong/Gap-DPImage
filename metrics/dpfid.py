@@ -7,10 +7,12 @@ from torchvision.models import inception_v3
 from torchvision.transforms import functional as F
 from scipy import linalg
 from opacus.accountants.analysis import rdp as privacy_analysis
+from PIL import Image
 
 import os
 import shutil
 import math
+import glob
 
 class DPFID(DPMetric):
     def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=10.0):
@@ -177,7 +179,7 @@ class DPFID(DPMetric):
         #     self.sensitive_dataset, save_dir, max_images=self.max_images
         # )
         original_dataloader, variations_dataloader = self._image_variation(
-            self.sensitive_dataset, save_dir, max_images=50000
+            self.sensitive_dataset, save_dir, max_images=2000
         )
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations: {len(variations_dataloader.dataset)}")
 
@@ -219,12 +221,56 @@ class DPFID(DPMetric):
         if self.is_delete_variations:
             try:
                 if os.path.exists(save_dir):
-                    shutil.rmtree(save_dir)  # Recursively delete the directory and its contents
-                    print(f"\n🗑️ Deleted directory: {save_dir}")
+                    original_dir = os.path.join(save_dir, 'original')
+                    variation_dir = os.path.join(save_dir, 'variation')
+
+                    def create_grid(image_dir, output_name):
+                        """Create a 10x5 grid from images in directory"""
+                        image_files = sorted(glob.glob(os.path.join(image_dir, "**", "*.png"), recursive=True) +
+                                            glob.glob(os.path.join(image_dir, "**", "*.jpg"), recursive=True))[:50]
+                        if len(image_files) == 0:
+                            return None
+
+                        images = [Image.open(f) for f in image_files]
+                        n_images = len(images)
+                        cols = 10
+                        rows = (n_images + cols - 1) // cols
+                        img_w, img_h = images[0].size
+
+                        grid = Image.new('RGB', (cols * img_w, rows * img_h))
+                        for idx, img in enumerate(images):
+                            row = idx // cols
+                            col = idx % cols
+                            grid.paste(img, (col * img_w, row * img_h))
+
+                        for img in images:
+                            img.close()
+
+                        grid_path = os.path.join(save_dir, output_name)
+                        grid.save(grid_path)
+                        return grid_path, n_images
+
+                    # Create grids for original and variation
+                    result_orig = create_grid(original_dir, f"{args.sensitive_dataset}_{args.public_model}_original.png")
+                    result_var = create_grid(variation_dir, f"{args.sensitive_dataset}_{args.public_model}_variation.png")
+
+                    if result_orig:
+                        print(f"\n📸 Saved {result_orig[1]} original images to: {result_orig[0]}")
+                    if result_var:
+                        print(f"📸 Saved {result_var[1]} variation images to: {result_var[0]}")
+
+                    # Delete original and variation subdirectories
+                    if os.path.exists(original_dir):
+                        shutil.rmtree(original_dir)
+                    if os.path.exists(variation_dir):
+                        shutil.rmtree(variation_dir)
+                    print(f"🗑️ Deleted image directories in: {save_dir}")
                 else:
                     print(f"\nℹ️ Directory {save_dir} does not exist, no deletion needed.")
+
             except Exception as e:
-                print(f"\n⚠️ Error deleting directory {save_dir}: {e}")
+                print(f"\n⚠️ Error processing variations: {e}")
 
         print("\n✅ DP-FID calculation completed!")
+        
         return fid_score

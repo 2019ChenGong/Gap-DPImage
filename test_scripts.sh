@@ -15,8 +15,6 @@ python run_metric.py -m DPGAP -pm dpimagebench-ldm -sd celeba
 
 python run_metric.py -m PE-Select -pm stable-diffusion-2-1-base -sd cifar10
 
-python run_metric.py -m DPGAP -pm stable-diffusion-2-1-base -sd cifar10 --apply_DP False
-
 # ln -s /bigtemp/fzv6en/gap_data/exp exp
 
 python run.py setup.n_gpus_per_node=3 --method PE-SGD --data_name mnist_28 --epsilon 10.0 eval.mode=val pretrain.mode=time_freq train.pe_freq=[10,20,30,40,50,60] train.contrastive_batch_size=256 train.contrastive_n_epochs=5 train.contrastive_num_samples=1000 train.contrastive_selection_ratio=0.1 -ed pe60
