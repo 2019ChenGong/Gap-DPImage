@@ -452,6 +452,8 @@ class PE(DPSynther):
         )
         logging.info(f'all_private_features.shape: {all_private_features.shape}')
 
+        del all_private_samples
+
         # Log the start of generating initial samples
         logging.info('Generating initial samples')
         labels = None
@@ -564,17 +566,34 @@ class PE(DPSynther):
             new_indices = np.concatenate(new_indices)
             new_samples = samples[new_indices]
             additional_info = additional_info[new_indices]
+            del samples
 
             # Generate new samples based on the selected indices
             logging.info('Generating new samples')
-            samples = self.api.image_variation(
-                images=new_samples,
-                additional_info=additional_info,
-                num_variations_per_image=1,
-                size=config.image_size,
-                variation_degree=config.variation_degree_schedule[t]
-            )
-            samples = np.squeeze(samples, axis=1)
+
+            chunk_size = 1000  # 根据 GPU 内存调整
+            N = len(new_samples)
+            for i in range(0, N, chunk_size):
+                # 生成变体（只处理这一小块）
+                variations = self.api.image_variation(
+                    images=new_samples[i:i+chunk_size],
+                    additional_info=additional_info[i:i+chunk_size],
+                    num_variations_per_image=1,
+                    size=config.image_size,
+                    variation_degree=config.variation_degree_schedule[t]
+                )  # shape: (B, 1, H, W, C) or (B, H, W, C)
+                new_samples[i:i+chunk_size] = np.squeeze(variations, axis=1)
+
+            samples = new_samples
+    
+            # samples = self.api.image_variation(
+            #     images=new_samples,
+            #     additional_info=additional_info,
+            #     num_variations_per_image=1,
+            #     size=config.image_size,
+            #     variation_degree=config.variation_degree_schedule[t]
+            # )
+            # samples = np.squeeze(samples, axis=1)
 
             packed_features = extract_features(
                     data=samples,

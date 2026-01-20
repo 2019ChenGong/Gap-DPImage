@@ -16,9 +16,9 @@ MODELS = [
     'prompt2med',
     ]
 
-METRIC = 'DPPrecision'
+METRIC = 'DPRecall'
 OUTPUT_DIR = 'exp'
-OUTPUT_FILE = 'all_dpprecision_nodp_0.8_result.txt'
+OUTPUT_FILE = 'all_dprecall_nodp_0.8_result.txt'
 
 def run_dpfid_for_combination(dataset_name, model_name):
     """Run DP-FID evaluation for a single dataset-model combination."""

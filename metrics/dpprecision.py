@@ -9,10 +9,12 @@ from sklearn.neighbors import NearestNeighbors
 
 import os
 import shutil
+import glob
+from PIL import Image
 
 class DPPrecision(DPMetric):
 
-    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=20.0, k=5):
+    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=20.0, k=6):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
         # Load Inception V3 and replace fc layer with Identity to get 2048-dim pool features
@@ -37,9 +39,11 @@ class DPPrecision(DPMetric):
         """
         if is_tensor:
             # Handle diffusion model outputs (often in [-1, 1])
+            # First clamp to valid range, then normalize to avoid negative values
             if images.min() < 0:
+                images = torch.clamp(images, -1, 1)  # Clamp first to handle overflow
                 images = (images + 1) / 2
-            images = torch.clamp(images, 0, 1)
+            images = torch.clamp(images, 0, 1)  # Final clamp to ensure [0, 1]
         else:
             # Handle NumPy arrays in [0, 255]
             images = torch.from_numpy(images).float() / 255.0
@@ -125,29 +129,27 @@ class DPPrecision(DPMetric):
         # A generated sample is "precise" if its k-th NN distance is within the real data manifold
         kth_distances = distances[:, -1]  # Distance to k-th nearest neighbor
 
-        # For each generated sample, check if it's within the k-NN ball of any real sample
-        # Use the real data's k-NN distances as per-sample thresholds
-        # A generated sample is precise if distance to its nearest real sample <= that real sample's k-NN radius
-        nearest_real_idx = indices[:, 0]  # Index of nearest real sample for each generated sample
-        nearest_distances = distances[:, 0]  # Distance to nearest real sample
-        thresholds = real_kth_distances[nearest_real_idx]  # k-NN radius of the nearest real sample
-
-        # Alternative: use median of real k-NN distances as global threshold
+        # Use median of real k-NN distances as global threshold
+        # This defines the "radius" of the real data manifold
         threshold = np.median(real_kth_distances)
+
+        # For each generated sample, use its nearest neighbor distance to real data
+        nearest_distances = distances[:, 0]  # Distance to nearest real sample
 
         if apply_dp:
             # Add DP noise to threshold calculation
             # Since threshold is derived from real data, it leaks information
-            # Sensitivity: changing one real sample can change distances
-
-            # For simplicity, we use a robust DP mechanism:
-            # Instead of noisy threshold, we add noise to distance comparisons
-            # Sensitivity of median distance: roughly clip_bound / sqrt(n_real)
-            threshold_sensitivity = self.clip_bound / np.sqrt(n_real)
+            #
+            # Sensitivity analysis for median of k-NN distances:
+            # - Removing one sample can change distances by at most 2 * clip_bound
+            #   (in worst case, the removed sample was the k-th neighbor)
+            # - Using conservative estimate: 2 * clip_bound (heuristic upper bound)
+            # - This is more conservative than clip_bound / sqrt(n_real)
+            threshold_sensitivity = 2 * self.clip_bound  # Conservative upper bound
             noise_scale = threshold_sensitivity * self.noise_multiplier
 
             print(f"\n   🔒 DP protection:")
-            print(f"      Threshold sensitivity: {threshold_sensitivity:.6f}")
+            print(f"      Threshold sensitivity (conservative): {threshold_sensitivity:.6f}")
             print(f"      Noise scale: {noise_scale:.6f}")
 
             # Add Laplace noise to threshold
@@ -165,15 +167,11 @@ class DPPrecision(DPMetric):
 
         print(f"\n   🎯 Distance statistics:")
         print(f"      Real k-NN distances - min: {real_kth_distances.min():.4f}, max: {real_kth_distances.max():.4f}, median: {np.median(real_kth_distances):.4f}")
-        print(f"      Generated-to-Real distances - min: {kth_distances.min():.4f}, max: {kth_distances.max():.4f}, mean: {kth_distances.mean():.4f}")
-        if apply_dp:
-            print(f"      DP-protected threshold (from real k-NN): {threshold:.4f}")
-        else:
-            print(f"      Threshold (median of real k-NN distances): {threshold:.4f}")
+        print(f"      Generated-to-Real NN distances - min: {nearest_distances.min():.4f}, max: {nearest_distances.max():.4f}, mean: {nearest_distances.mean():.4f}")
+        print(f"      Threshold: {threshold:.4f}")
 
         # Count how many generated samples have nearest-neighbor distance below threshold
-        # Using the nearest real sample's k-NN radius as threshold (per-sample)
-        count_precise = np.sum(nearest_distances <= thresholds)
+        count_precise = np.sum(nearest_distances <= threshold)
 
         precision = count_precise / n_gen
 
@@ -195,6 +193,8 @@ class DPPrecision(DPMetric):
         print(f"   Dataset size (n): {self.dataset_size}")
         print(f"   k-nearest neighbors: {self.k}")
 
+        # args.non_DP is False when --non_DP flag is used (store_false action)
+        # So apply_dp should be the same as args.non_DP (True by default, False when flag is used)
         apply_dp = args.non_DP
 
         time = self.get_time()
@@ -293,6 +293,6 @@ class DPPrecision(DPMetric):
             except Exception as e:
                 print(f"\n⚠️ Error processing variations: {e}")
 
-        print("\n✅ DP-FID calculation completed!")
-        
+        print("\n✅ DP-Precision calculation completed!")
+
         return precision_score
