@@ -262,11 +262,11 @@ class DPMetric(object):
         self.public_model = public_model 
         self._variation_batch_size = 64
         self._variation_guidance_scale = 7.5
-        self._variation_num_inference_steps = 100
+        self._variation_num_inference_steps = 50
         self.epsilon = epsilon
         self.device = "cuda"
         self.max_images = 50000
-        self.variation_degree = 0.9
+        self.variation_degree = 0.8
         self.is_delete_variations = True
         self.dataloader_size = 16
 

@@ -6,11 +6,12 @@ import torchvision.transforms as T
 from PIL import Image
 import numpy as np
 from tqdm import tqdm
-from diffusers import StableDiffusionPipeline
+from diffusers import StableDiffusionPipeline, DDIMScheduler
 from diffusers import StableDiffusionImg2ImgPipeline
 from concurrent.futures import ThreadPoolExecutor, wait, as_completed
 from concurrent.futures import ProcessPoolExecutor
 import threading
+from fld.features.InceptionFeatureExtractor import InceptionFeatureExtractor
 import math
 
 from .api import API
@@ -44,6 +45,7 @@ def _worker_task_group(args):
 
     # 加载 pipeline
     pipe = StableDiffusionPipeline.from_pretrained(**pipe_kwargs).to(device)
+    pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.safety_checker = None
     pipe.set_progress_bar_config(disable=True)
 
@@ -146,18 +148,19 @@ def generate_multigpu(
     all_prompts = all_prompts[indices]
 
     return all_images, all_prompts
-
+import gc
 def _run_image_variation_on_device(args):
     """
     Run one variation pass on a given GPU.
     Args:
         args: (gpu_id, images_np, prompts, size, variation_degree, pipe_kwargs, common_params)
     """
-    gpu_id, images_np, prompts, size, variation_degree, num_variations_per_image, _variation_checkpoint, max_batch_size, num_inference_steps, guidance_scale, = args
+    gpu_id, images_np, prompts, size, variation_degree, num_variations_per_image, _variation_checkpoint, max_batch_size, num_inference_steps, guidance_scale, private_image_size, feature_extractor_batch_size, feature_extractor, tmp_folder, = args
     device = 'cuda:%d' % gpu_id
 
     # Load pipeline
     pipe = StableDiffusionImg2ImgPipeline.from_pretrained(_variation_checkpoint, torch_dtype=torch.float16).to(device)
+    pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.text_encoder = pipe.text_encoder.to(torch.float16)
     pipe.safety_checker = None
     pipe.set_progress_bar_config(disable=True)
@@ -175,8 +178,28 @@ def _run_image_variation_on_device(args):
     variations = []
     num_iters = int(np.ceil(len(images) / max_batch_size))
 
+    if feature_extractor is None:
+        feature_extractor = None
+    else:
+        feature_extractor = InceptionFeatureExtractor(save_path="./dataset/{}_{}/".format(tmp_folder, private_image_size))
+        feature_extractor.model = feature_extractor.model.to(device)
+        feature_extractor.device = device
+    def extract_feature(data):
+        data = torch.from_numpy(data).permute(0, 3, 1, 2).float()
+        if data.shape[1] == 1:
+            data = data.repeat(1, 3, 1, 1)
+        if data.shape[-1] != private_image_size or data.shape[-2] != private_image_size:
+            data = torch.nn.functional.interpolate(data, size=(private_image_size, private_image_size), mode="bicubic", antialias=True)
+        
+        # Extract features from the synthetic images using the feature extractor.
+        np_feats = feature_extractor.get_tensor_features(data)
+        return np_feats
+
+    packed_features = []
+    variations = []
     for _ in tqdm(range(num_variations_per_image)):
         sub_variations = []
+        sub_features = []
         for i in range(num_iters):
             start = i * max_batch_size
             end = min((i + 1) * max_batch_size, len(images))
@@ -193,38 +216,39 @@ def _run_image_variation_on_device(args):
                     num_images_per_prompt=1,
                     output_type='np'
                 ).images
-            sub_variations.append(out)
-        sub_variations = np.concatenate(sub_variations, axis=0)
+                if feature_extractor is not None:
+                    features = extract_feature(out)
+
+            if feature_extractor is not None:
+                sub_features.append(features)
+            else:
+                sub_variations.append(out)
         
-        variations.append(sub_variations)
-    variations = np.stack(variations, axis=1)
+        if feature_extractor is not None:
+            sub_features = np.concatenate(sub_features, axis=0)
+            packed_features.append(sub_features)
+        else:
+            sub_variations = np.concatenate(sub_variations, axis=0)
+            variations.append(sub_variations)
+    
     torch.cuda.empty_cache()
+    gc.collect()
     del pipe
-    return _round_to_uint8(variations), gpu_id
 
-    for i in range(num_iters):
-        start = i * max_batch_size
-        end = min((i + 1) * max_batch_size, len(images))
-        batch_images = images[start:end]
-        batch_prompts = prompts[start:end]
+    if feature_extractor is not None:
+        packed_features = np.mean(packed_features, axis=0)
+        return packed_features, gpu_id
+    else:
+        variations = np.stack(variations, axis=1)
+        return _round_to_uint8(variations), gpu_id
 
-        with torch.no_grad():
-            out = pipe(
-                prompt=batch_prompts,
-                image=batch_images.to(device, dtype=torch.float16),
-                num_inference_steps=num_inference_steps,
-                strength=variation_degree,
-                guidance_scale=guidance_scale,
-                num_images_per_prompt=num_variations_per_image,
-                output_type='np'
-            ).images
-            out = out.reshape(len(batch_prompts), num_variations_per_image, *out.shape[1:])
-        variations.append(out)
 
-    variations = np.concatenate(variations, axis=0)
-    torch.cuda.empty_cache()
-    del pipe
-    return _round_to_uint8(variations)
+def safe_variation(args):
+    try:
+        return _run_image_variation_on_device(args)
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 class StableDiffusionAPI(API):
     def __init__(self, random_sampling_checkpoint,
@@ -378,6 +402,7 @@ class StableDiffusionAPI(API):
             num_gpus=torch.cuda.device_count()
         )
         # print(len(images))
+        gc.collect()
 
         return images, prompts
 
@@ -431,7 +456,11 @@ class StableDiffusionAPI(API):
         size,
         variation_degree,
         num_variations_per_image,
-        num_gpus=None
+        num_gpus=None,
+        private_image_size=None,
+        feature_extractor_batch_size=None,
+        feature_extractor=None,
+        tmp_folder=None,
     ):
         if not (0 <= variation_degree <= 1):
             raise ValueError('variation_degree should be between 0 and 1')
@@ -471,43 +500,29 @@ class StableDiffusionAPI(API):
                 self._variation_checkpoint,
                 self._variation_batch_size,
                 self._variation_num_inference_steps,
-                self._variation_guidance_scale
+                self._variation_guidance_scale,
+                private_image_size,
+                feature_extractor_batch_size,
+                feature_extractor,
+                tmp_folder,
             ))
-
-        # 并行执行：每个 GPU 一个线程
-        # with ThreadPoolExecutor(max_workers=actual_num_gpus) as executor:
-        #     futures = [
-        #         executor.submit(_run_image_variation_on_device, task)
-        #         for task in task_list
-        #     ]
-        #     # 按提交顺序收集结果（保序）
-        #     chunk_results = []
-        #     for future in tqdm(futures, total=len(futures), desc="Generating variations"):
-        #         chunk_results.append(future.result())
         
         with ProcessPoolExecutor(max_workers=actual_num_gpus) as executor:
             futures = [executor.submit(_run_image_variation_on_device, task) for task in task_list]
             chunk_results = []
             for future in tqdm(futures, total=len(futures), desc="Generating variations"):
                 res = future.result()
-                print(res[1])
+                if isinstance(res, dict) and "error" in res:
+                    print("Worker error:", res["traceback"])
                 chunk_results.append(res[0])
+        
+        # res = _run_image_variation_on_device(task_list[0])
 
         # chunk_results[i] shape: (chunk_size_i, num_variations_per_image, C, H, W)
         # 合并所有 chunk
         final_result = np.concatenate(chunk_results, axis=0)  # (N, num_variations_per_image, C, H, W)
+        gc.collect()
         return final_result
-        
-
-        # Run in parallel
-        # with Pool(processes=min(num_gpus, num_variations_per_image)) as pool:
-        #     results = list(tqdm(
-        #         pool.imap(_run_image_variation_on_device, task_list),
-        #         total=len(task_list),
-        #         desc="Generating variations"
-        #     ))
-
-        return np.stack(results, axis=1)
 
     def _image_variation(self, images, prompts, size, variation_degree):
         width, height = list(map(int, size.split('x')))

@@ -16,9 +16,9 @@ MODELS = [
     'prompt2med',
     ]
 
-METRIC = 'DPFID'
+METRIC = 'DPPrecision'
 OUTPUT_DIR = 'exp'
-OUTPUT_FILE = 'all_dpfid_dpclipping10_result.txt'
+OUTPUT_FILE = 'all_dpprecision_nodp_0.8_result.txt'
 
 def run_dpfid_for_combination(dataset_name, model_name):
     """Run DP-FID evaluation for a single dataset-model combination."""
@@ -32,6 +32,7 @@ def run_dpfid_for_combination(dataset_name, model_name):
         '-m', METRIC,
         '-pm', model_name,
         '-sd', dataset_name,
+        '--non_DP'
     ]
 
     print(f"Running command: {' '.join(cmd)}\n")

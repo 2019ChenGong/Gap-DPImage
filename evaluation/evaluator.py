@@ -509,10 +509,10 @@ def compute_inception_score_from_logits(logits, splits=1):
 def get_prompt(data_name: str):
 
     if data_name.startswith("mnist"):
-        return ["A grayscale image of a handwritten digit 0", "A grayscale image of a handwritten digit 1", "an image of hand-written 2", "an image of hand-written 3", "an image of hand-written 4", "an image of hand-written 5", "an image of hand-written 6", "an image of hand-written 7", "an image of hand-written 8", "an image of hand-written 9"]
+        return ["A grayscale image of a handwritten digit 0", "A grayscale image of a handwritten digit 1", "A grayscale image of hand-written 2", "A grayscale image of hand-written 3", "A grayscale image of hand-written 4", "A grayscale image of hand-written 5", "A grayscale image of hand-written 6", "A grayscale image of hand-written 7", "A grayscale image of hand-written 8", "A grayscale image of hand-written 9"]
     
     elif data_name.startswith("fmnist"):
-        return ["A grayscale image of a T-shirt", "A grayscale image of a handwritten digit Trouser", "an image of hand-written Pullover", "an image of hand-written Dress", "an image of hand-written Coat", "an image of hand-written Sandal", "an image of hand-written Shirt", "an image of hand-written Sneaker", "an image of hand-written Bag", "an image of hand-written Ankle boot"]
+        return ["A grayscale image of a T-shirt", "A grayscale image of Trouser", "A grayscale image of Pullover", "A grayscale image of Dress", "A grayscale image of Coat", "A grayscale image of Sandal", "A grayscale image of Shirt", "A grayscale image of Sneaker", "A grayscale image of Bag", "A grayscale image of Ankle boot"]
     
     elif data_name.startswith("cifar100"):
         cifar100_y = '''Superclass	Classes

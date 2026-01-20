@@ -478,29 +478,44 @@ class PE(DPSynther):
             else:
                 # Perform image variation to generate multiple variations per sample
                 logging.info('Running image variation')
-                packed_samples = self.api.image_variation(
-                    images=samples,
-                    additional_info=additional_info,
-                    num_variations_per_image=config.lookahead_degree,
-                    size=config.image_size,
-                    variation_degree=config.variation_degree_schedule[t]
-                )
+
+                if 'combine_variation_extraction' in config and config['combine_variation_extraction']:
+                    packed_features = self.api.image_variation(
+                        images=samples,
+                        additional_info=additional_info,
+                        num_variations_per_image=config.lookahead_degree,
+                        size=config.image_size,
+                        variation_degree=config.variation_degree_schedule[t],
+                        private_image_size=config.private_image_size,
+                        feature_extractor_batch_size=config.feature_extractor_batch_size,
+                        feature_extractor=self.feature_extractor,
+                        tmp_folder=tmp_folder,
+                    )
+                else:
+                    packed_samples = self.api.image_variation(
+                        images=samples,
+                        additional_info=additional_info,
+                        num_variations_per_image=config.lookahead_degree,
+                        size=config.image_size,
+                        variation_degree=config.variation_degree_schedule[t],
+                    )
 
             # Extract features from the generated samples
-            packed_features = []
-            logging.info('Running feature extraction')
-            for i in range(packed_samples.shape[1]):
-                sub_packed_features = extract_features(
-                    data=packed_samples[:, i],
-                    tmp_folder=tmp_folder,
-                    num_workers=2,
-                    model_name=self.feature_extractor,
-                    res=config.private_image_size,
-                    batch_size=config.feature_extractor_batch_size
-                )
-                logging.info(f'sub_packed_features.shape: {sub_packed_features.shape}')
-                packed_features.append(sub_packed_features)
-            packed_features = np.mean(packed_features, axis=0)
+            if 'combine_variation_extraction' not in config or not config['combine_variation_extraction']:
+                packed_features = []
+                logging.info('Running feature extraction')
+                for i in range(packed_samples.shape[1]):
+                    sub_packed_features = extract_features(
+                        data=packed_samples[:, i],
+                        tmp_folder=tmp_folder,
+                        num_workers=2,
+                        model_name=self.feature_extractor,
+                        res=config.private_image_size,
+                        batch_size=config.feature_extractor_batch_size
+                    )
+                    logging.info(f'sub_packed_features.shape: {sub_packed_features.shape}')
+                    packed_features.append(sub_packed_features)
+                packed_features = np.mean(packed_features, axis=0)
 
             # Compute histograms for each class
             logging.info('Computing histogram')
@@ -527,7 +542,7 @@ class PE(DPSynther):
             for class_i in range(private_num_classes):
                 visualize(
                     samples=samples[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
-                    packed_samples=packed_samples[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
+                    packed_samples=packed_samples[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)] if 'combine_variation_extraction' not in config or not config['combine_variation_extraction'] else None,
                     count=count[num_samples_per_class * class_i:num_samples_per_class * (class_i + 1)],
                     folder=f'{config.log_dir}/samples',
                     suffix=f'class{class_i}_iter{t}'
@@ -666,7 +681,10 @@ def visualize(samples, packed_samples, count, folder, suffix=''):
     
     # Transpose the samples and packed_samples to the correct format for visualization
     samples = samples.transpose((0, 3, 1, 2))
-    packed_samples = packed_samples.transpose((0, 1, 4, 2, 3))
+    if packed_samples is None:
+        packed_samples = np.expand_dims(samples, axis=1)
+    else:
+        packed_samples = packed_samples.transpose((0, 1, 4, 2, 3))
     
     # Get the indices of the top 5 samples based on count
     ids = np.argsort(count)[::-1][:5]

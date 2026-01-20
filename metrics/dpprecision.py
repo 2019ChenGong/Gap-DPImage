@@ -12,7 +12,7 @@ import shutil
 
 class DPPrecision(DPMetric):
 
-    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=20.0, k=3):
+    def __init__(self, sensitive_dataset, public_model, epsilon, noise_multiplier=5.0, clip_bound=20.0, k=5):
 
         super().__init__(sensitive_dataset, public_model, epsilon)
         # Load Inception V3 and replace fc layer with Identity to get 2048-dim pool features
@@ -107,18 +107,33 @@ class DPPrecision(DPMetric):
         print(f"      k (neighbors): {self.k}")
 
         # Build k-NN index on REAL features (this is sensitive!)
-        nbrs = NearestNeighbors(n_neighbors=min(self.k, n_real), algorithm='auto', metric='euclidean')
-        nbrs.fit(real_features)
+        # Use k+1 neighbors for real-to-real distances (to exclude self)
+        nbrs_real = NearestNeighbors(n_neighbors=min(self.k + 1, n_real), algorithm='auto', metric='euclidean')
+        nbrs_real.fit(real_features)
+
+        # Calculate real-to-real k-NN distances for threshold
+        # This defines the "manifold" of real data
+        real_distances, _ = nbrs_real.kneighbors(real_features)
+        real_kth_distances = real_distances[:, -1]  # k-th neighbor (excluding self)
 
         # For each generated sample, find k nearest neighbors in real set
+        nbrs = NearestNeighbors(n_neighbors=min(self.k, n_real), algorithm='auto', metric='euclidean')
+        nbrs.fit(real_features)
         distances, indices = nbrs.kneighbors(generated_features)
 
-        # Calculate precision using kth nearest neighbor distance as threshold
-        # A generated sample is "precise" if its k-th nearest neighbor in real set is close enough
+        # Calculate precision using kth nearest neighbor distance
+        # A generated sample is "precise" if its k-th NN distance is within the real data manifold
         kth_distances = distances[:, -1]  # Distance to k-th nearest neighbor
 
-        # Use median distance as threshold (common in Precision/Recall papers)
-        threshold = np.median(kth_distances)
+        # For each generated sample, check if it's within the k-NN ball of any real sample
+        # Use the real data's k-NN distances as per-sample thresholds
+        # A generated sample is precise if distance to its nearest real sample <= that real sample's k-NN radius
+        nearest_real_idx = indices[:, 0]  # Index of nearest real sample for each generated sample
+        nearest_distances = distances[:, 0]  # Distance to nearest real sample
+        thresholds = real_kth_distances[nearest_real_idx]  # k-NN radius of the nearest real sample
+
+        # Alternative: use median of real k-NN distances as global threshold
+        threshold = np.median(real_kth_distances)
 
         if apply_dp:
             # Add DP noise to threshold calculation
@@ -149,16 +164,16 @@ class DPPrecision(DPMetric):
             threshold = threshold_noisy
 
         print(f"\n   🎯 Distance statistics:")
-        print(f"      Min k-th NN distance: {kth_distances.min():.4f}")
-        print(f"      Max k-th NN distance: {kth_distances.max():.4f}")
-        print(f"      Mean k-th NN distance: {kth_distances.mean():.4f}")
+        print(f"      Real k-NN distances - min: {real_kth_distances.min():.4f}, max: {real_kth_distances.max():.4f}, median: {np.median(real_kth_distances):.4f}")
+        print(f"      Generated-to-Real distances - min: {kth_distances.min():.4f}, max: {kth_distances.max():.4f}, mean: {kth_distances.mean():.4f}")
         if apply_dp:
-            print(f"      DP-protected threshold: {threshold:.4f}")
+            print(f"      DP-protected threshold (from real k-NN): {threshold:.4f}")
         else:
-            print(f"      Median k-th NN distance (threshold): {threshold:.4f}")
+            print(f"      Threshold (median of real k-NN distances): {threshold:.4f}")
 
-        # Count how many generated samples have k-th NN distance below threshold
-        count_precise = np.sum(kth_distances <= threshold)
+        # Count how many generated samples have nearest-neighbor distance below threshold
+        # Using the nearest real sample's k-NN radius as threshold (per-sample)
+        count_precise = np.sum(nearest_distances <= thresholds)
 
         precision = count_precise / n_gen
 
@@ -180,6 +195,8 @@ class DPPrecision(DPMetric):
         print(f"   Dataset size (n): {self.dataset_size}")
         print(f"   k-nearest neighbors: {self.k}")
 
+        apply_dp = args.non_DP
+
         time = self.get_time()
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
@@ -196,7 +213,7 @@ class DPPrecision(DPMetric):
         )
         # Variations are considered public, no clipping needed
         generated_features = self._get_inception_features(
-            variations_dataloader, is_tensor=True, apply_clipping=False
+            variations_dataloader, is_tensor=True, apply_clipping=apply_dp
         )
 
         print(f"   Real features shape: {real_features.shape}")
@@ -226,12 +243,56 @@ class DPPrecision(DPMetric):
         if self.is_delete_variations:
             try:
                 if os.path.exists(save_dir):
-                    shutil.rmtree(save_dir)
-                    print(f"\n🗑️ Deleted directory: {save_dir}")
+                    original_dir = os.path.join(save_dir, 'original')
+                    variation_dir = os.path.join(save_dir, 'variation')
+
+                    def create_grid(image_dir, output_name):
+                        """Create a 10x5 grid from images in directory"""
+                        image_files = sorted(glob.glob(os.path.join(image_dir, "**", "*.png"), recursive=True) +
+                                            glob.glob(os.path.join(image_dir, "**", "*.jpg"), recursive=True))[:50]
+                        if len(image_files) == 0:
+                            return None
+
+                        images = [Image.open(f) for f in image_files]
+                        n_images = len(images)
+                        cols = 10
+                        rows = (n_images + cols - 1) // cols
+                        img_w, img_h = images[0].size
+
+                        grid = Image.new('RGB', (cols * img_w, rows * img_h))
+                        for idx, img in enumerate(images):
+                            row = idx // cols
+                            col = idx % cols
+                            grid.paste(img, (col * img_w, row * img_h))
+
+                        for img in images:
+                            img.close()
+
+                        grid_path = os.path.join(save_dir, output_name)
+                        grid.save(grid_path)
+                        return grid_path, n_images
+
+                    # Create grids for original and variation
+                    result_orig = create_grid(original_dir, f"{args.sensitive_dataset}_{args.public_model}_original.png")
+                    result_var = create_grid(variation_dir, f"{args.sensitive_dataset}_{args.public_model}_variation.png")
+
+                    if result_orig:
+                        print(f"\n📸 Saved {result_orig[1]} original images to: {result_orig[0]}")
+                    if result_var:
+                        print(f"📸 Saved {result_var[1]} variation images to: {result_var[0]}")
+
+                    # Delete original and variation subdirectories
+                    if os.path.exists(original_dir):
+                        shutil.rmtree(original_dir)
+                    if os.path.exists(variation_dir):
+                        shutil.rmtree(variation_dir)
+                    print(f"🗑️ Deleted image directories in: {save_dir}")
                 else:
                     print(f"\nℹ️ Directory {save_dir} does not exist, no deletion needed.")
-            except Exception as e:
-                print(f"\n⚠️ Error deleting directory {save_dir}: {e}")
 
-        print("\n✅ DP-Precision calculation completed!")
+            except Exception as e:
+                print(f"\n⚠️ Error processing variations: {e}")
+
+        print("\n✅ DP-FID calculation completed!")
+        
         return precision_score

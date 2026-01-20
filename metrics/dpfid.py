@@ -60,11 +60,10 @@ class DPFID(DPMetric):
 
         return images.to(self.device)
 
-    def _get_inception_features(self, images, is_tensor=True, batch_size=64, apply_clipping=True):
-
+    def _get_inception_features(self, images, is_tensor=True, apply_clipping=False):
         features = []
-        with torch.no_grad():
 
+        with torch.no_grad():
             for batch, _ in images:
                 batch = self._preprocess_images(batch, is_tensor=is_tensor)
                 feats = self.inception_model(batch)
@@ -75,24 +74,26 @@ class DPFID(DPMetric):
         features = np.concatenate(features, axis=0)
 
         # Apply clipping for private dataset features to ensure bounded sensitivity
-        print("   Applying feature clipping..." if apply_clipping else "   No feature clipping applied.")
         if apply_clipping:
             features = self._clip_features(features)
 
         return features
 
     def _clip_features(self, features):
-
         norms = np.linalg.norm(features, axis=1, keepdims=True)
         clipping_mask = norms > self.clip_bound
 
         # Debug info
         num_clipped = clipping_mask.sum()
         total_samples = len(features)
+        print(f"\n   ✂️  Feature clipping statistics:")
+        print(f"      Samples clipped: {num_clipped}/{total_samples} ({100*num_clipped/total_samples:.1f}%)")
+        print(f"      Norm before clipping - mean: {norms.mean():.4f}, max: {norms.max():.4f}, min: {norms.min():.4f}")
 
         features = np.where(clipping_mask, features * (self.clip_bound / norms), features)
 
         norms_after = np.linalg.norm(features, axis=1, keepdims=True)
+        print(f"      Norm after clipping - mean: {norms_after.mean():.4f}, max: {norms_after.max():.4f}")
 
         return features
 
