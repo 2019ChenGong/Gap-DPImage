@@ -176,7 +176,7 @@ class Evaluator(object):
         num_classes = len(set(synthetic_labels))
 
         # Load the image reward model.
-        rm_model = RM.load("ImageReward-v1.0")
+        # rm_model = RM.load("ImageReward-v1.0")
         # ir = 0
         # prompt = get_prompt(self.config.sensitive_data.name)
 
