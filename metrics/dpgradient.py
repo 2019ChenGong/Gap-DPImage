@@ -9,7 +9,7 @@ import os
 import shutil
 import glob
 
-class DPGAP(DPMetric):
+class DPGradient(DPMetric):
 
     def __init__(self, sensitive_dataset, public_model, epsilon):
 
@@ -34,6 +34,8 @@ class DPGAP(DPMetric):
                 super(FixedRandomNet, self).__init__()
                 self.batch_size = batch_size
                 self.vec_size = vec_size
+                self.image_height = image_height
+                self.image_width = image_width
 
                 # Convolutional block for feature extraction (shared for both inputs)
                 self.conv_block = nn.Sequential(
@@ -55,8 +57,13 @@ class DPGAP(DPMetric):
                 self.fc = nn.Sequential(
                     nn.Linear(self.feature_dim, 512),
                     nn.ReLU(),
-                    nn.Linear(512, self.vec_size) 
+                    nn.Linear(512, self.vec_size)
                 )
+
+                # Random projection matrix to reduce gradient dimension to vec_size
+                # Gradient has shape (3 * H * W), project to vec_size
+                grad_dim = 3 * image_height * image_width
+                self.grad_projection = nn.Linear(grad_dim, vec_size, bias=False)
 
                 # Fix weights to be non-trainable
                 self._fix_weights()
@@ -78,6 +85,45 @@ class DPGAP(DPMetric):
 
                 return output1, output2
 
+            def forward_with_gradient(self, input1, input2):
+                """
+                Compute gradients of network output w.r.t. input images.
+                Returns gradient vectors projected to vec_size dimension.
+                """
+                # Resize if needed (same as forward)
+                if input1.shape[-1] == 28:
+                    input1 = F.interpolate(input1, size=[32, 32])
+                if input2.shape[-1] == 28:
+                    input2 = F.interpolate(input2, size=[32, 32])
+
+                # Enable gradients for input
+                input1 = input1.detach().requires_grad_(True)
+                input2 = input2.detach().requires_grad_(True)
+
+                # Forward pass
+                feat1 = self.conv_block(input1).view(input1.size(0), -1)
+                feat2 = self.conv_block(input2).view(input2.size(0), -1)
+                output1 = self.fc(feat1)
+                output2 = self.fc(feat2)
+
+                # Compute scalar loss (sum of all outputs) for gradient computation
+                loss1 = output1.sum()
+                loss2 = output2.sum()
+
+                # Compute gradients w.r.t. inputs
+                grad1 = torch.autograd.grad(loss1, input1, create_graph=False, retain_graph=False)[0]
+                grad2 = torch.autograd.grad(loss2, input2, create_graph=False, retain_graph=False)[0]
+
+                # Flatten gradients: (batch, 3, H, W) -> (batch, 3*H*W)
+                grad1_flat = grad1.view(grad1.size(0), -1)
+                grad2_flat = grad2.view(grad2.size(0), -1)
+
+                # Project to vec_size dimension using random projection
+                grad1_proj = self.grad_projection(grad1_flat)
+                grad2_proj = self.grad_projection(grad2_flat)
+
+                return grad1_proj, grad2_proj
+
         # Instantiate and return the network
         return FixedRandomNet(self.dataloader_size, 32 if self.image_height == 28 else self.image_height, 32 if self.image_width == 28 else self.image_width, self.vec_size)
 
@@ -97,8 +143,8 @@ class DPGAP(DPMetric):
         reduced_variants = U1[:, :n_dim] @ torch.diag(S1[:n_dim])  # Shape: (N, n_dim)
         reduced_originals = U2[:, :n_dim] @ torch.diag(S2[:n_dim])  # Shape: (N, n_dim)
 
-        self.print_stats("reduced_variants Output", reduced_variants)
-        self.print_stats("reduced_originals Output", reduced_originals)
+        self.print_stats("reduced_variants Gradient", reduced_variants)
+        self.print_stats("reduced_originals Gradient", reduced_originals)
 
         distance = torch.norm(reduced_variants - reduced_originals, p='fro')
 
@@ -115,7 +161,7 @@ class DPGAP(DPMetric):
 
     def cal_metric(self, args):
 
-        print("🚀 Starting DPGap calculation...")
+        print("🚀 Starting DPGradient calculation...")
 
         # args.non_DP is False when --non_DP flag is used (store_false action)
         # So apply_dp should be the same as args.non_DP (True by default, False when flag is used)
@@ -129,30 +175,29 @@ class DPGAP(DPMetric):
         original_dataloader, variations_dataloader = self._image_variation(
             self.sensitive_dataset, save_dir, max_images=2000
         )
-
         print(f"📊 Original_images: {len(original_dataloader.dataset)}; Variations shape: {len(variations_dataloader.dataset)}")
 
         random_model = self.random_network().to(self.device)
 
         # Process dataloaders in batches
-        variant_outputs = []
-        original_outputs = []
+        variant_gradients = []
+        original_gradients = []
 
-        with torch.no_grad():
-            for (var_batch, _), (orig_batch, _) in zip(variations_dataloader, original_dataloader):
-                var_batch = var_batch.to(self.device)
-                orig_batch = orig_batch.to(self.device)
-                # print(var_batch.shape, orig_batch.shape)
-                var_out, orig_out = random_model(var_batch, orig_batch)
-                variant_outputs.append(var_out)
-                original_outputs.append(orig_out)
+        print("🔍 Computing gradients...")
+        for (var_batch, _), (orig_batch, _) in zip(variations_dataloader, original_dataloader):
+            var_batch = var_batch.to(self.device)
+            orig_batch = orig_batch.to(self.device)
+            # Compute gradients instead of forward outputs
+            var_grad, orig_grad = random_model.forward_with_gradient(var_batch, orig_batch)
+            variant_gradients.append(var_grad.detach())
+            original_gradients.append(orig_grad.detach())
 
-        # Concatenate outputs
-        variant_output = torch.cat(variant_outputs, dim=0)
-        original_output = torch.cat(original_outputs, dim=0)
+        # Concatenate gradient outputs
+        variant_output = torch.cat(variant_gradients, dim=0)
+        original_output = torch.cat(original_gradients, dim=0)
 
-        print(f"Variations output matrix shape: {variant_output.shape}")
-        print(f"Original images output matrix shape: {original_output.shape}")
+        print(f"Variations gradient matrix shape: {variant_output.shape}")
+        print(f"Original images gradient matrix shape: {original_output.shape}")
 
         result = self.svd_decomposition(variant_output, original_output, self.n_dim)
 
@@ -160,9 +205,9 @@ class DPGAP(DPMetric):
         print(f"   Public model: {args.public_model}")
         print(f"   Sensitive dataset: {args.sensitive_dataset}")
         if apply_dp:
-            print(f"   DP-Gap Score: {result}")
+            print(f"   DPGradient Score: {result}")
         else:
-            print(f"   Gap Score (no DP): {result}")
+            print(f"   DPGradient Score (no DP): {result}")
 
         if self.is_delete_variations:
             try:
@@ -216,7 +261,7 @@ class DPGAP(DPMetric):
             except Exception as e:
                 print(f"\n⚠️ Error processing variations: {e}")
 
-        print("\n✅ DPGap calculation completed!")
+        print("\n✅ DPGradient calculation completed!")
 
         return result
     

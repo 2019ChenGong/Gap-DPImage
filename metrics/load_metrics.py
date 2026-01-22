@@ -3,6 +3,7 @@ from metrics.dpgap import DPGAP
 from metrics.pe_select import PE_Select
 from metrics.dpprecision import DPPrecision
 from metrics.dprecall import DPRecall
+from metrics.dpgradient import DPGradient
 
 def load_metrics(metrics_name, sensitive_dataset, public_model, epsilon):
 
@@ -16,6 +17,8 @@ def load_metrics(metrics_name, sensitive_dataset, public_model, epsilon):
         metrics_model = DPPrecision(sensitive_dataset, public_model, epsilon)
     elif metrics_name == "DPRecall":
         metrics_model = DPRecall(sensitive_dataset, public_model, epsilon)
+    elif metrics_name == "DPGradient":
+        metrics_model = DPGradient(sensitive_dataset, public_model, epsilon)
     else:
         print(f"Error: '{metrics_name}' is not a valid measure method.")
         return
