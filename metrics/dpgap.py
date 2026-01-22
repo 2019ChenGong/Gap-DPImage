@@ -3,9 +3,11 @@ import torch.nn.functional as F
 import torch
 import torch.nn as nn
 import numpy as np
+from PIL import Image
 
 import os
 import shutil
+import glob
 
 class DPGAP(DPMetric):
 
@@ -114,6 +116,11 @@ class DPGAP(DPMetric):
 
         print("🚀 Starting DPGap calculation...")
 
+        # args.non_DP is False when --non_DP flag is used (store_false action)
+        # So apply_dp should be the same as args.non_DP (True by default, False when flag is used)
+        apply_dp = args.non_DP
+        print(f"🔒 DP mode: {'Enabled' if apply_dp else 'Disabled'}")
+
         time = self.get_time()
         save_dir = f"{args.save_dir}/{time}-{args.sensitive_dataset}-{args.public_model}"
 
@@ -145,24 +152,67 @@ class DPGAP(DPMetric):
 
         result = self.svd_decomposition(variant_output, original_output, self.n_dim)
 
-        print(f"📊 Public model: {args.public_model}")
-        print(f"📊 Sensitive dataset: {args.sensitive_dataset}")
-        print(f"✅ DPGap Score: {result}")
+        print(f"\n📊 Results:")
+        print(f"   Public model: {args.public_model}")
+        print(f"   Sensitive dataset: {args.sensitive_dataset}")
+        if apply_dp:
+            print(f"   DP-Gap Score: {result}")
+        else:
+            print(f"   Gap Score (no DP): {result}")
 
         if self.is_delete_variations:
             try:
                 if os.path.exists(save_dir):
-                    shutil.rmtree(save_dir)  # Recursively delete the directory and its contents
-                    print(f"🗑️ Deleted directory: {save_dir}")
+                    original_dir = os.path.join(save_dir, 'original')
+                    variation_dir = os.path.join(save_dir, 'variation')
+
+                    def create_grid(image_dir, output_name):
+                        """Create a 10x5 grid from images in directory"""
+                        image_files = sorted(glob.glob(os.path.join(image_dir, "**", "*.png"), recursive=True) +
+                                            glob.glob(os.path.join(image_dir, "**", "*.jpg"), recursive=True))[:50]
+                        if len(image_files) == 0:
+                            return None
+
+                        images = [Image.open(f) for f in image_files]
+                        n_images = len(images)
+                        cols = 10
+                        rows = (n_images + cols - 1) // cols
+                        img_w, img_h = images[0].size
+
+                        grid = Image.new('RGB', (cols * img_w, rows * img_h))
+                        for idx, img in enumerate(images):
+                            row = idx // cols
+                            col = idx % cols
+                            grid.paste(img, (col * img_w, row * img_h))
+
+                        for img in images:
+                            img.close()
+
+                        grid_path = os.path.join(save_dir, output_name)
+                        grid.save(grid_path)
+                        return grid_path, n_images
+
+                    # Create grids for original and variation
+                    result_orig = create_grid(original_dir, f"{args.sensitive_dataset}_{args.public_model}_original.png")
+                    result_var = create_grid(variation_dir, f"{args.sensitive_dataset}_{args.public_model}_variation.png")
+
+                    if result_orig:
+                        print(f"\n📸 Saved {result_orig[1]} original images to: {result_orig[0]}")
+                    if result_var:
+                        print(f"📸 Saved {result_var[1]} variation images to: {result_var[0]}")
+
+                    # Delete original and variation subdirectories
+                    if os.path.exists(original_dir):
+                        shutil.rmtree(original_dir)
+                    if os.path.exists(variation_dir):
+                        shutil.rmtree(variation_dir)
+                    print(f"🗑️ Deleted image directories in: {save_dir}")
                 else:
-                    print(f"ℹ️ Directory {save_dir} does not exist, no deletion needed.")
+                    print(f"\nℹ️ Directory {save_dir} does not exist, no deletion needed.")
             except Exception as e:
-                print(f"⚠️ Error deleting directory {save_dir}: {e}")
-            print("✅ DPGap calculation completed!")
+                print(f"\n⚠️ Error processing variations: {e}")
 
-        else:
-            print("✅ DPGap calculation completed!")
-
+        print("\n✅ DPGap calculation completed!")
         return result
     
 
