@@ -28,7 +28,7 @@ if __name__ == '__main__':
     sys.path.append(os.getcwd())
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_dir', default="configs")
-    parser.add_argument('--method', '-m', default="DP-FETA-Pro")
+    parser.add_argument('--method', '-m', default="PE")
     parser.add_argument('--epsilon', '-e', default="10.0")
     parser.add_argument('--data_name', '-dn', default="cifar10_32")
     parser.add_argument('--config_suffix', '-cs', default="")

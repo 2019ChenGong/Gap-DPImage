@@ -12,7 +12,7 @@ def main(config):
 
     initialize_environment(config)
 
-    sensitive_train_loader, sensitive_test_loader, _, _, _ = load_data(config)
+    sensitive_train_loader, _, sensitive_test_loader, _, _ = load_data(config)
 
     evaluator = Evaluator(config)
     evaluator.cal_acc_no_dp(sensitive_train_loader, sensitive_test_loader)

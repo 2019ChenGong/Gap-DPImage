@@ -1,7 +1,5 @@
 export HF_HOME='/bigtemp/fzv6en/diffuser_cache'
 cd /p/fzv6enresearch/gap/dm-lora/
-# bash scripts/finetune_sd_cifar10.sh
-
 
 subjects="cifar10_32" # Subject Name
 # subjects="camelyon_96" # Subject Name
@@ -13,7 +11,7 @@ model_resolution=256
 sensitive_resolution=32
 batch_size=4096
 gradient_accumulation_steps=16
-lower_name="base_top0.5_fs5_finegrained"
+lower_name="base_top0.2_fs5_nomid"
 # lower_name="v2-1-base_top0.8_fs5"
 fisher_batch_size=50000
 fisher_sigma=5.0
@@ -61,10 +59,10 @@ accelerate launch train_dreambooth_lora_fisher.py \
     --unet_lora_rank_q 4 \
     --unet_lora_rank_out 4 \
     --micro_batch_size 1 \
-    --top_k_lora 0.5 \
+    --top_k_lora 0.2 \
     --fisher_num_batches=$fisher_batch_size \
-    --fisher_sigma=$fisher_sigma 
-    # --fisher_remove_key="mid"
+    --fisher_sigma=$fisher_sigma \
+    --fisher_remove_key="mid"
     # --variation_weight
 
 
@@ -101,5 +99,6 @@ accelerate launch train_dreambooth_lora.py \
     --attn_keywords="tuning_layers.json" \
     --fisher_batch_size=$fisher_batch_size \
     --fisher_sigma=$fisher_sigma
+
 
 python generate_sd_bench.py --batch_size 30 --data_name $subjects --output_dir $OUTPUT_DIR"/lora_k4q4v4o4_"$lower_name"_0.0005" --num 60000 --target_size $sensitive_resolution --model_id $MODEL_NAME --gen_size $model_resolution

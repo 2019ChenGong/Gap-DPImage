@@ -1,26 +1,26 @@
+
+# python run_metric.py -m PE-Select -sd mnist
+# python run_metric.py -m PE-Select -sd cifar10
+# python run_metric.py -m PE-Select -sd octmnist
+# python run_metric.py -m PE-Select -sd celeba_male
+# python run_metric.py -m PE-Select -sd camelyon
+
 export HF_HOME='/bigtemp/fzv6en/diffuser_cache'
 cd /p/fzv6enresearch/gap/dm-lora/
 # bash scripts/finetune_sd_cifar10.sh
 
 
 subjects="cifar10_32" # Subject Name
-# subjects="camelyon_96" # Subject Name
-# subjects="celeba_male_256" # Subject Name
 data_path="/p/fzv6enresearch/gap/dataset/cifar10/train_32.zip"
-# data_path="/p/fzv6enresearch/gap/exp/train_96.zip"
-# data_path="/p/fzv6enresearch/gap/dataset/celeba/train_256_Male.zip"
 model_resolution=256
 sensitive_resolution=32
+# batch_size_per_gpu=256
 batch_size=4096
 gradient_accumulation_steps=16
-lower_name="base_top0.5_fs5_finegrained"
-# lower_name="v2-1-base_top0.8_fs5"
-fisher_batch_size=50000
-fisher_sigma=5.0
+lower_name="base_top0.5_random"
 eps=10
 # teapot subject images are available at dataset link provided in the README
 MODEL_NAME="stable-diffusion-v1-5/stable-diffusion-v1-5" # Model card
-# MODEL_NAME="Manojb/stable-diffusion-2-1-base"
 OUTPUT_DIR="../exp/lora_${subjects}_4096bs_1ksteps_eps${eps}" # Where to save the model
 
 
@@ -41,8 +41,8 @@ accelerate launch train_dreambooth_lora_fisher.py \
     --instance_prompt="" \
     --validation_prompt="An image of an airplane." \
     --resolution=$model_resolution \
-    --train_batch_size 1 \
-    --gradient_accumulation_steps 1 \
+    --train_batch_size=1 \
+    --gradient_accumulation_steps=1 \
     --learning_rate=$lr \
     --lr_scheduler="constant" \
     --lr_warmup_steps=0 \
@@ -62,10 +62,9 @@ accelerate launch train_dreambooth_lora_fisher.py \
     --unet_lora_rank_out 4 \
     --micro_batch_size 1 \
     --top_k_lora 0.5 \
-    --fisher_num_batches=$fisher_batch_size \
-    --fisher_sigma=$fisher_sigma 
-    # --fisher_remove_key="mid"
-    # --variation_weight
+    --fisher_num_batches 50000 \
+    --random_selection
+    # --variation_weight \
 
 
 accelerate launch train_dreambooth_lora.py \
@@ -98,8 +97,7 @@ accelerate launch train_dreambooth_lora.py \
     --unet_lora_rank_out 4 \
     --micro_batch_size 1 \
     --eps $eps \
-    --attn_keywords="tuning_layers.json" \
-    --fisher_batch_size=$fisher_batch_size \
-    --fisher_sigma=$fisher_sigma
+    --attn_keywords="tuning_layers.json"
 
-python generate_sd_bench.py --batch_size 30 --data_name $subjects --output_dir $OUTPUT_DIR"/lora_k4q4v4o4_"$lower_name"_0.0005" --num 60000 --target_size $sensitive_resolution --model_id $MODEL_NAME --gen_size $model_resolution
+
+python generate_sd_bench.py --batch_size 30 --data_name $subjects --output_dir $OUTPUT_DIR"/lora_k4q4v4o4_"$lower_name"_0.0005" --num_per_cls 6000 --target_size $sensitive_resolution --model_id $MODEL_NAME --gen_size $model_resolution
