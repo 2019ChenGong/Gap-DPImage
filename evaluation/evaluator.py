@@ -199,8 +199,11 @@ class Evaluator(object):
         is_mean, _ = compute_inception_score_from_logits(gen_logit)
         fid = FID().compute_metric(train_feat, None, gen_feat)
         fld = FLD(eval_feat="train").compute_metric(train_feat, test_feat, gen_feat)
-        p = PrecisionRecall(mode="Precision").compute_metric(train_feat, None, gen_feat) # Default precision
-        r = PrecisionRecall(mode="Recall", num_neighbors=5).compute_metric(train_feat, None, gen_feat)
+        try:
+            p = PrecisionRecall(mode="Precision").compute_metric(train_feat, None, gen_feat) # Default precision
+            r = PrecisionRecall(mode="Recall", num_neighbors=5).compute_metric(train_feat, None, gen_feat)
+        except:
+            p = r = 0
 
         return fid, is_mean, fld, p, r
     

@@ -1,2 +1,0 @@
-INFO - dataset_loader.py - 2026-01-28 06:25:58,533 - train size: 45000 val size: 5000
-INFO - dataset_loader.py - 2026-01-28 06:25:58,533 - delta is reset as 2.07404851125286e-06
